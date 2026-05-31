@@ -6,7 +6,7 @@ mod helpers;
 use dataset::{load_ground_truth, load_vectors, open_dataset, open_optional_dataset};
 use hdf5::File;
 use helpers::{compute_ground_truth, duration_average, mib, ms, percentile, recall_at_k};
-use hnsw::{Hnsw, HnswSearcher};
+use hnsw::{Hnsw, HnswSearcher, L2Squared};
 use pq::ProductQuantizer;
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -381,6 +381,7 @@ fn load_or_build_index<const DIM: usize>(
                 params.ef_construction,
                 params.ef_search,
                 config.seed.unwrap_or(42),
+                L2Squared,
             );
 
             let build_start = Instant::now();

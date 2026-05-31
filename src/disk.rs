@@ -10,7 +10,7 @@ use serde::{
     ser::{SerializeSeq, SerializeStruct},
 };
 
-use crate::{Hnsw, node::Node};
+use crate::{Hnsw, dist::Distance, node::Node};
 
 struct FlatF32<'a, const D: usize>(&'a [[f32; D]]);
 impl<'a, const D: usize> From<&'a [[f32; D]]> for FlatF32<'a, D> {
@@ -21,7 +21,7 @@ impl<'a, const D: usize> From<&'a [[f32; D]]> for FlatF32<'a, D> {
 
 #[allow(non_snake_case)]
 #[derive(Deserialize)]
-struct SerializedHnsw {
+struct SerializedHnsw<DS> {
     M: usize,
     M0: usize,
     ef_construction: usize,
@@ -32,16 +32,25 @@ struct SerializedHnsw {
     max_layer: usize,
     ml: f64,
     seed: u64,
+    dist: DS,
 }
 
-impl<const D: usize> Hnsw<D> {
+impl<const D: usize, DS> Hnsw<D, DS>
+where
+    DS: Distance<D> + Serialize,
+{
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn Error>> {
         let f = File::create(path)?;
         let w = BufWriter::new(f);
         bincode2::serialize_into(w, self)?;
         Ok(())
     }
+}
 
+impl<const D: usize, DS> Hnsw<D, DS>
+where
+    DS: Distance<D> + for<'de> Deserialize<'de>,
+{
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
         let b = std::fs::read(path)?;
         Ok(bincode2::deserialize(&b)?)
@@ -61,12 +70,15 @@ impl<'a, const D: usize> Serialize for FlatF32<'a, D> {
     }
 }
 
-impl<const D: usize> Serialize for Hnsw<D> {
+impl<const D: usize, DS> Serialize for Hnsw<D, DS>
+where
+    DS: Distance<D> + Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("Hnsw", 10)?;
+        let mut state = serializer.serialize_struct("Hnsw", 11)?;
         state.serialize_field("M", &(self.M as u64))?;
         state.serialize_field("M0", &(self.M0 as u64))?;
         state.serialize_field("ef_construction", &(self.ef_construction as u64))?;
@@ -77,16 +89,20 @@ impl<const D: usize> Serialize for Hnsw<D> {
         state.serialize_field("max_layer", &(self.max_layer as u64))?;
         state.serialize_field("ml", &self.ml)?;
         state.serialize_field("seed", &self.seed)?;
+        state.serialize_field("dist", &self.dist)?;
         state.end()
     }
 }
 
-impl<'de, const D: usize> Deserialize<'de> for Hnsw<D> {
+impl<'de, const D: usize, DS> Deserialize<'de> for Hnsw<D, DS>
+where
+    DS: Distance<D> + Deserialize<'de>,
+{
     fn deserialize<DE>(deserializer: DE) -> Result<Self, DE::Error>
     where
         DE: serde::Deserializer<'de>,
     {
-        let disk = SerializedHnsw::deserialize(deserializer)?;
+        let disk = SerializedHnsw::<DS>::deserialize(deserializer)?;
 
         let mut data = Vec::with_capacity(disk.data.len());
         for vec in disk.data {
@@ -118,6 +134,7 @@ impl<'de, const D: usize> Deserialize<'de> for Hnsw<D> {
             ml: disk.ml,
             seed: disk.seed,
             rng,
+            dist: disk.dist,
         })
     }
 }

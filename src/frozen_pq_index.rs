@@ -2,7 +2,8 @@ use pq::ProductQuantizer;
 use rayon::prelude::*;
 
 use crate::{
-    Hnsw, HnswSearcher, context::SearchContext, link::Link, node::Node, nodes_heap_usage_bytes,
+    Hnsw, HnswSearcher, L2Squared, context::SearchContext, link::Link, node::Node,
+    nodes_heap_usage_bytes,
 };
 use std::{cell::Cell, cmp::Reverse, mem::size_of};
 
@@ -19,7 +20,7 @@ pub struct FrozenPQHnsw<const D: usize, const Q: usize> {
 
 impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
     pub(crate) fn from_pq(
-        hnsw: Hnsw<D>,
+        hnsw: Hnsw<D, L2Squared>,
         quantized_data: Vec<[u8; Q]>,
         pq: ProductQuantizer<Q, D>,
     ) -> Self {
@@ -39,7 +40,7 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
         }
     }
 
-    pub(crate) fn from_hnsw(mut hnsw: Hnsw<D>, k: usize) -> Self {
+    pub(crate) fn from_hnsw(mut hnsw: Hnsw<D, L2Squared>, k: usize) -> Self {
         let mut pq: ProductQuantizer<Q, D> = ProductQuantizer::new(k);
         let hnsw_data = std::mem::take(&mut hnsw.data);
         pq.fit(&hnsw_data);
@@ -130,7 +131,7 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
     }
 }
 
-impl<const D: usize> Hnsw<D> {
+impl<const D: usize> Hnsw<D, L2Squared> {
     pub fn freeze<const Q: usize>(self, k: usize) -> FrozenPQHnsw<D, Q> {
         FrozenPQHnsw::from_hnsw(self, k)
     }

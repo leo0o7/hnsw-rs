@@ -1,5 +1,6 @@
-use hnsw::l2_squared;
 use std::{cmp::Ordering, collections::BinaryHeap, time::Duration};
+
+use hnsw::{Distance, L2Squared};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ScoredId {
@@ -40,7 +41,7 @@ fn exact_top_k<const D: usize>(base: &[[f32; D]], query: &[f32; D], k: usize) ->
     for (id, vector) in base.iter().enumerate() {
         let candidate = ScoredId {
             id,
-            distance: l2_squared(query, vector),
+            distance: L2Squared.distance(query, vector),
         };
 
         if heap.len() < k {

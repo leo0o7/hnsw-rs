@@ -16,10 +16,10 @@ mod node;
 #[cfg(test)]
 mod tests;
 
-pub use dist::l2_squared;
+pub use dist::{Distance, L2Squared};
 
 #[allow(non_snake_case)]
-pub struct Hnsw<const D: usize> {
+pub struct Hnsw<const D: usize, DS = L2Squared> {
     M: usize,
     M0: usize,
     pub(crate) ef_construction: usize,
@@ -32,6 +32,7 @@ pub struct Hnsw<const D: usize> {
     ml: f64,
     seed: u64,
     rng: StdRng,
+    dist: DS,
 }
 
 pub trait HnswSearcher<const D: usize> {
@@ -49,13 +50,10 @@ pub trait HnswSearcher<const D: usize> {
     fn memory_usage_bytes(&self) -> usize;
 }
 
-impl<const D: usize> Hnsw<D> {
-    #[allow(non_snake_case)]
-    pub fn new(M: usize, M0: usize, ef_construction: usize, ef_search: usize) -> Self {
-        let seed = rand::rng().next_u64();
-        Self::new_seeded(M, M0, ef_construction, ef_search, seed)
-    }
-
+impl<const D: usize, DS> Hnsw<D, DS>
+where
+    DS: Distance<D>,
+{
     #[allow(non_snake_case)]
     pub fn new_seeded(
         M: usize,
@@ -63,6 +61,7 @@ impl<const D: usize> Hnsw<D> {
         ef_construction: usize,
         ef_search: usize,
         seed: u64,
+        dist: DS,
     ) -> Self {
         assert!(M > 1, "M must be > 1");
         assert!(M0 > 0, "M0 must be > 0");
@@ -83,12 +82,14 @@ impl<const D: usize> Hnsw<D> {
             ml,
             seed,
             rng: StdRng::seed_from_u64(seed),
+            dist,
         }
     }
 
     #[allow(non_snake_case)]
-    pub fn new_default(M: usize) -> Self {
-        Self::new(M, 2 * M, 128, 32)
+    pub fn new(M: usize, M0: usize, ef_construction: usize, ef_search: usize, dist: DS) -> Self {
+        let seed = rand::rng().next_u64();
+        Self::new_seeded(M, M0, ef_construction, ef_search, seed, dist)
     }
 
     pub fn insert_context(&self) -> InsertContext {
@@ -194,7 +195,7 @@ impl<const D: usize> Hnsw<D> {
 
         let ep_link = Link {
             node_index: ep,
-            distance: l2_squared(q, &self.data[ep]),
+            distance: self.distance(q, &self.data[ep]),
         };
         frontier.push(Reverse(ep_link));
         best.push(ep_link);
@@ -210,7 +211,7 @@ impl<const D: usize> Hnsw<D> {
                     continue;
                 }
                 self.nodes[neigh.node_index].epoch.set(self.epoch.get());
-                let dist = l2_squared(q, &self.data[neigh.node_index]);
+                let dist = self.distance(q, &self.data[neigh.node_index]);
                 if best.len() == ef && best.peek().is_some_and(|furthest| furthest.distance > dist)
                 {
                     best.pop();
@@ -273,7 +274,7 @@ impl<const D: usize> Hnsw<D> {
                     neigh.epoch.set(self.epoch.get());
                     pq.push(Reverse(Link {
                         node_index: idx,
-                        distance: l2_squared(qv, vec),
+                        distance: self.distance(qv, vec),
                     }));
                 }
             }
@@ -291,9 +292,9 @@ impl<const D: usize> Hnsw<D> {
             && best.len() < max_connections
         {
             let mut diverse = true;
-            let c_to_q = l2_squared(qv, vec);
+            let c_to_q = self.distance(qv, vec);
             for other in best.iter().map(|link| &self.data[link.node_index]) {
-                let c_to_other = l2_squared(vec, other);
+                let c_to_other = self.distance(vec, other);
                 if c_to_q >= c_to_other {
                     diverse = false;
                     break;
@@ -355,6 +356,14 @@ impl<const D: usize> Hnsw<D> {
     }
 
     #[inline(always)]
+    fn distance(&self, a: &[f32; D], b: &[f32; D]) -> f32 {
+        let distance = self.dist.distance(a, b);
+        debug_assert!(distance.is_finite(), "distance must be finite");
+        debug_assert!(distance >= 0.0, "distance must be non-negative");
+        distance
+    }
+
+    #[inline(always)]
     fn random_layer(&mut self) -> usize {
         let x: f64 = Open01.sample(&mut self.rng);
         (-x.ln() * self.ml).floor() as usize
@@ -381,7 +390,20 @@ impl<const D: usize> Hnsw<D> {
     }
 }
 
-impl<const D: usize> HnswSearcher<D> for Hnsw<D> {
+impl<const D: usize, DS> Hnsw<D, DS>
+where
+    DS: Distance<D> + Default,
+{
+    #[allow(non_snake_case)]
+    pub fn new_default(M: usize) -> Self {
+        Self::new(M, 2 * M, 128, 32, DS::default())
+    }
+}
+
+impl<const D: usize, DS> HnswSearcher<D> for Hnsw<D, DS>
+where
+    DS: Distance<D>,
+{
     fn search_context(&self) -> SearchContext {
         SearchContext::init(self.ef_search)
     }

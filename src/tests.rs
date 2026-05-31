@@ -7,6 +7,20 @@ use rand::RngExt;
 const EPSILON: f32 = 1e-6;
 const MIN_RECALL: f32 = 0.95;
 
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+struct Weighted2D {
+    x: f32,
+    y: f32,
+}
+
+impl Distance<2> for Weighted2D {
+    fn distance(&self, a: &[f32; 2], b: &[f32; 2]) -> f32 {
+        let dx = a[0] - b[0];
+        let dy = a[1] - b[1];
+        self.x * dx * dx + self.y * dy * dy
+    }
+}
+
 fn approx_eq(a: f32, b: f32) -> bool {
     (a - b).abs() < EPSILON
 }
@@ -19,7 +33,7 @@ fn brute_force_knn<const D: usize>(
     let mut distances: Vec<(usize, f32)> = data
         .iter()
         .enumerate()
-        .map(|(i, v)| (i, l2_squared(v, query)))
+        .map(|(i, v)| (i, L2Squared.distance(v, query)))
         .collect();
 
     distances.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -47,7 +61,7 @@ fn temp_path(name: &str) -> PathBuf {
 
 #[test]
 fn test_knn() {
-    let mut knn = Hnsw::new_default(5);
+    let mut knn = Hnsw::<2, L2Squared>::new_default(5);
     knn.insert([0.0, 0.0]);
     knn.insert([3.0, 3.0]);
     knn.insert([4.0, 4.0]);
@@ -63,7 +77,7 @@ fn test_knn() {
 
 #[test]
 fn test_k_larger_than_number_of_entries() {
-    let mut knn = Hnsw::new_default(5);
+    let mut knn = Hnsw::<1, L2Squared>::new_default(5);
     knn.insert([1.0]);
     knn.insert([2.0]);
 
@@ -73,7 +87,7 @@ fn test_k_larger_than_number_of_entries() {
 
 #[test]
 fn test_duplicate() {
-    let mut knn = Hnsw::new_default(5);
+    let mut knn = Hnsw::<1, L2Squared>::new_default(5);
     knn.insert([0.0]);
     knn.insert([2.0]);
     knn.insert([2.0]);
@@ -90,10 +104,40 @@ fn test_duplicate() {
 
 #[test]
 fn test_empty_graph() {
-    let knn = Hnsw::new_default(2);
+    let knn = Hnsw::<2, L2Squared>::new_default(2);
     let closest = knn.search(&[1.0, 1.0], 3);
     dbg!(&closest);
     assert!(closest.is_empty());
+}
+
+#[test]
+fn custom_distance_controls_search_order() {
+    let mut knn =
+        Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
+    knn.insert([10.0, 0.0]);
+    knn.insert([0.0, 2.0]);
+    knn.insert([0.0, 3.0]);
+
+    let closest = knn.search(&[0.0, 0.0], 1);
+
+    assert_eq!(closest, vec![(0, 0.0)]);
+}
+
+#[test]
+fn stateful_distance_survives_save_load() {
+    let path = temp_path("weighted-distance");
+    let mut original =
+        Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
+    original.insert([10.0, 0.0]);
+    original.insert([0.0, 2.0]);
+    original.insert([0.0, 3.0]);
+
+    original.save(&path).unwrap();
+    let loaded: Hnsw<2, Weighted2D> = Hnsw::load(&path).unwrap();
+
+    assert_eq!(loaded.search(&[0.0, 0.0], 1), vec![(0, 0.0)]);
+
+    fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -114,13 +158,13 @@ fn test_save_load_roundtrip_search_and_insert() {
     let path = temp_path("roundtrip");
     let query = [1.0, 1.0];
 
-    let mut original = Hnsw::new_seeded(5, 10, 128, 32, 42);
+    let mut original = Hnsw::<2, L2Squared>::new_seeded(5, 10, 128, 32, 42, L2Squared);
     original.insert([0.0, 0.0]);
     original.insert([3.0, 3.0]);
     original.insert([4.0, 4.0]);
 
     original.save(&path).unwrap();
-    let mut loaded = Hnsw::load(&path).unwrap();
+    let mut loaded = Hnsw::<2, L2Squared>::load(&path).unwrap();
 
     assert_eq!(loaded.search(&query, 2), original.search(&query, 2));
 
@@ -181,7 +225,7 @@ fn test_avg_recall() {
     const N_RECALL_QUERIES: usize = 1000;
 
     let mut rng = rand::rng();
-    let mut knn = Hnsw::new_default(M);
+    let mut knn = Hnsw::<DIMS, L2Squared>::new_default(M);
 
     for _ in 0..N {
         let v: [f32; DIMS] = (0..DIMS)
