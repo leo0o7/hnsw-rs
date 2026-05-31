@@ -19,7 +19,7 @@ The tradeoff is the usual one for approximate search: searches are much faster t
 - [x] reusable search/insert contexts to avoid allocating on every operation
 - [x] squared L2 distance
 - [x] product quantization
-- [ ] multiple distance metrics
+- [x] custom distance metrics
 - [ ] parallel construction
 
 ### Non goals
@@ -43,13 +43,14 @@ Measured on an Apple M3 Pro with saved indexes loaded from disk.
 ## Usage
 
 ```rust
-use hnsw::Hnsw;
+use hnsw::{Hnsw, L2Squared};
 
 let mut index = Hnsw::<2>::new(
     16,  // M: max links on upper layers
     32,  // M0: max links on layer 0
     128, // ef_construction: candidate list size during insertion
     32,  // ef_search: candidate list size during search
+    L2Squared,
 );
 
 index.insert([0.0, 0.0]);
@@ -273,6 +274,35 @@ That makes dimensions a compile-time part of the index type.
 
 Every vector in one index has the same size, so representing that in the type avoids checking the dimension on every insert/search.
 It also keeps vector storage flat and makes the distance function work on fixed-size arrays instead of slices whose length has to be trusted at runtime.
+
+### Custom distance metrics
+
+`Hnsw<D, DS = L2Squared>` is generic over a `Distance<D>` trait.
+The distance metric is part of the index type, so Rust specializes the index code for each metric at compile time.
+
+That means distance calls are statically dispatched: there is no `dyn Distance`, no virtual call, and no runtime metric lookup inside the search loop.
+
+By default, the index uses squared L2 distance, but any metric that implements `Distance<D>` can be used:
+
+```rust
+use hnsw::{Distance, Hnsw, L2Squared};
+
+// default L2Squared
+let mut index = Hnsw::<128>::new(16, 32, 128, 32, L2Squared);
+
+// custom metric
+struct Cosine;
+impl<const D: usize> Distance<D> for Cosine {
+    fn distance(&self, a: &[f32; D], b: &[f32; D]) -> f32 {
+        // your implementation here
+        todo!()
+    }
+}
+let mut index = Hnsw::<128, Cosine>::new(16, 32, 128, 32, Cosine);
+```
+
+`new_seeded` also accept custom distances.
+`new_default` is available when the distance type implements `Default`.
 
 ### Reusable contexts
 
