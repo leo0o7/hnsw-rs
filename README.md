@@ -202,6 +202,24 @@ Config:
 |        196 |  195.355 |       0.502 |  32 |  64 |             200 |        64 |  0.090 |      35.08 |    0.9374 | 5129.6 |  0.195 |  0.196 |  0.234 |  0.291 |  0.902 |
 |        196 |  195.355 |       0.502 |  32 |  64 |             200 |       128 |  0.089 |      35.08 |    0.9393 | 3579.2 |  0.279 |  0.281 |  0.349 |  0.444 |  1.307 |
 
+#### Build performance
+
+Build-time memory is higher because `memory_usage_bytes()` counts `Vec::capacity()`, not `.len()`.
+
+During incremental construction, `Vec`s over-allocate and leave some spare capacity.
+After loading from disk, `bincode2` reconstructs with exact capacity, so the unused capacity is gone.
+
+| Dataset   |   M |  M0 | ef_construction | ef_search | build s | inserts/s | build memory MiB |
+| --------- | --: | --: | --------------: | --------: | ------: | --------: | ---------------: |
+| SIFT-1M   |  16 |  32 |             128 |        32 | 206.685 |      4838 |          1042.83 |
+| SIFT-1M   |  16 |  32 |             128 |        64 | 206.481 |      4843 |          1042.83 |
+| SIFT-1M   |  32 |  64 |             200 |        64 | 382.948 |      2611 |          1224.88 |
+| SIFT-1M   |  32 |  64 |             200 |       128 | 397.282 |      2517 |          1224.88 |
+| MNIST-60k |  16 |  32 |             128 |        32 |  17.760 |      3378 |           222.27 |
+| MNIST-60k |  16 |  32 |             128 |        64 |  17.990 |      3335 |           222.27 |
+| MNIST-60k |  32 |  64 |             200 |        64 |  28.616 |      2097 |           227.42 |
+| MNIST-60k |  32 |  64 |             200 |       128 |  28.888 |      2077 |           227.42 |
+
 ### Config file
 
 The benchmark is configured by `bench-config.toml`.
