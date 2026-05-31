@@ -61,7 +61,7 @@ fn temp_path(name: &str) -> PathBuf {
 
 #[test]
 fn test_knn() {
-    let mut knn = Hnsw::<2, L2Squared>::new_default(5);
+    let mut knn = Hnsw::<2>::new_default(5);
     knn.insert([0.0, 0.0]);
     knn.insert([3.0, 3.0]);
     knn.insert([4.0, 4.0]);
@@ -77,7 +77,7 @@ fn test_knn() {
 
 #[test]
 fn test_k_larger_than_number_of_entries() {
-    let mut knn = Hnsw::<1, L2Squared>::new_default(5);
+    let mut knn = Hnsw::<1>::new_default(5);
     knn.insert([1.0]);
     knn.insert([2.0]);
 
@@ -87,7 +87,7 @@ fn test_k_larger_than_number_of_entries() {
 
 #[test]
 fn test_duplicate() {
-    let mut knn = Hnsw::<1, L2Squared>::new_default(5);
+    let mut knn = Hnsw::<1>::new_default(5);
     knn.insert([0.0]);
     knn.insert([2.0]);
     knn.insert([2.0]);
@@ -104,7 +104,7 @@ fn test_duplicate() {
 
 #[test]
 fn test_empty_graph() {
-    let knn = Hnsw::<2, L2Squared>::new_default(2);
+    let knn = Hnsw::<2>::new_default(2);
     let closest = knn.search(&[1.0, 1.0], 3);
     dbg!(&closest);
     assert!(closest.is_empty());
@@ -158,13 +158,13 @@ fn test_save_load_roundtrip_search_and_insert() {
     let path = temp_path("roundtrip");
     let query = [1.0, 1.0];
 
-    let mut original = Hnsw::<2, L2Squared>::new_seeded(5, 10, 128, 32, 42, L2Squared);
+    let mut original = Hnsw::<2>::new_seeded(5, 10, 128, 32, 42, L2Squared);
     original.insert([0.0, 0.0]);
     original.insert([3.0, 3.0]);
     original.insert([4.0, 4.0]);
 
     original.save(&path).unwrap();
-    let mut loaded = Hnsw::<2, L2Squared>::load(&path).unwrap();
+    let mut loaded = Hnsw::<2>::load(&path).unwrap();
 
     assert_eq!(loaded.search(&query, 2), original.search(&query, 2));
 
@@ -225,7 +225,7 @@ fn test_avg_recall() {
     const N_RECALL_QUERIES: usize = 1000;
 
     let mut rng = rand::rng();
-    let mut knn = Hnsw::<DIMS, L2Squared>::new_default(M);
+    let mut knn = Hnsw::<DIMS>::new_default(M);
 
     for _ in 0..N {
         let v: [f32; DIMS] = (0..DIMS)
