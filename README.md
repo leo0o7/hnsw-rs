@@ -98,9 +98,7 @@ cargo run --release --bin bench -- path/to/config.toml
 
 The benchmark runner can either build an index from the dataset or load an existing saved index, depending on whether `load_index_prefix` is set in the config.
 
-### Results
-
-These results were measured with saved indexes loaded from disk.
+### Benchmark setup
 
 Build/run command:
 
@@ -120,15 +118,18 @@ Environment:
 - Query cycles: 100
 - Measured queries: 90,000
 
+Datasets:
+
+| Dataset   | Path                            | Base vectors | Query vectors | Dim | Ground truth |
+| --------- | ------------------------------- | -----------: | ------------: | --: | ------------ |
+| SIFT-1M   | `data/sift-128-euclidean.hdf5`  |    1,000,000 |         1,000 | 128 | `neighbors`  |
+| MNIST-60k | `data/mnist-784-euclidean.hdf5` |       60,000 |         1,000 | 784 | `neighbors`  |
+
+### Query performance
+
+These results were measured with saved indexes loaded from disk.
+
 #### SIFT-1M
-
-Config:
-
-- Dataset: `data/sift-128-euclidean.hdf5`
-- Base vectors: `train`, 1,000,000 vectors
-- Query vectors: `test`, 1,000 vectors
-- Dimension: 128
-- Ground truth: `neighbors`
 
 |   M |  M0 | ef_construction | ef_search | load s | memory MiB | recall@10 |     QPS | avg ms | p50 ms | p90 ms | p99 ms | max ms |
 | --: | --: | --------------: | --------: | -----: | ---------: | --------: | ------: | -----: | -----: | -----: | -----: | -----: |
@@ -139,14 +140,6 @@ Config:
 
 #### MNIST-60k
 
-Config:
-
-- Dataset: `data/mnist-784-euclidean.hdf5`
-- Base vectors: `train`, 60,000 vectors
-- Query vectors: `test`, 1,000 vectors
-- Dimension: 784
-- Ground truth: `neighbors`
-
 |   M |  M0 | ef_construction | ef_search | load s | memory MiB | recall@10 |    QPS | avg ms | p50 ms | p90 ms | p99 ms | max ms |
 | --: | --: | --------------: | --------: | -----: | ---------: | --------: | -----: | -----: | -----: | -----: | -----: | -----: |
 |  16 |  32 |             128 |        32 |  0.089 |     199.02 |    0.9866 | 8017.7 |  0.125 |  0.126 |  0.156 |  0.185 |  0.497 |
@@ -154,21 +147,14 @@ Config:
 |  32 |  64 |             200 |        64 |  0.111 |     202.54 |    0.9986 | 3901.2 |  0.256 |  0.261 |  0.335 |  0.400 |  0.744 |
 |  32 |  64 |             200 |       128 |  0.107 |     202.54 |    0.9998 | 2413.7 |  0.414 |  0.421 |  0.552 |  0.657 |  1.425 |
 
-#### Product quantization
+### Product quantization
 
 These results use frozen PQ indexes over the same saved HNSW graphs.
 PQ fit and encode are one-time preprocessing costs; search uses ADC distances over compressed vectors.
 
-##### SIFT-1M PQ
+Each PQ subquantizer is trained with 256 centroids.
 
-Config:
-
-- Dataset: `data/sift-128-euclidean.hdf5`
-- Base vectors: `train`, 1,000,000 vectors
-- Query vectors: `test`, 1,000 vectors
-- Dimension: 128
-- Ground truth: `neighbors`
-- PQ centroids per quantizer: 256
+#### SIFT-1M PQ
 
 | quantizers | pq fit s | pq encode s |   M |  M0 | ef_construction | ef_search | load s | memory MiB | recall@10 |     QPS | avg ms | p50 ms | p90 ms | p99 ms | max ms |
 | ---------: | -------: | ----------: | --: | --: | --------------: | --------: | -----: | ---------: | --------: | ------: | -----: | -----: | -----: | -----: | -----: |
@@ -185,16 +171,7 @@ Config:
 |        128 |  120.994 |       3.795 |  32 |  64 |             200 |        64 |  0.598 |     632.94 |    0.9782 |  2979.8 |  0.336 |  0.347 |  0.417 |  0.473 |  0.911 |
 |        128 |  120.994 |       3.795 |  32 |  64 |             200 |       128 |  0.597 |     632.94 |    0.9947 |  1751.0 |  0.571 |  0.595 |  0.725 |  0.808 |  1.821 |
 
-##### MNIST-60k PQ
-
-Config:
-
-- Dataset: `data/mnist-784-euclidean.hdf5`
-- Base vectors: `train`, 60,000 vectors
-- Query vectors: `test`, 1,000 vectors
-- Dimension: 784
-- Ground truth: `neighbors`
-- PQ centroids per quantizer: 256
+#### MNIST-60k PQ
 
 | quantizers | pq fit s | pq encode s |   M |  M0 | ef_construction | ef_search | load s | memory MiB | recall@10 |    QPS | avg ms | p50 ms | p90 ms | p99 ms | max ms |
 | ---------: | -------: | ----------: | --: | --: | --------------: | --------: | -----: | ---------: | --------: | -----: | -----: | -----: | -----: | -----: | -----: |
@@ -203,23 +180,24 @@ Config:
 |        196 |  195.355 |       0.502 |  32 |  64 |             200 |        64 |  0.090 |      35.08 |    0.9374 | 5129.6 |  0.195 |  0.196 |  0.234 |  0.291 |  0.902 |
 |        196 |  195.355 |       0.502 |  32 |  64 |             200 |       128 |  0.089 |      35.08 |    0.9393 | 3579.2 |  0.279 |  0.281 |  0.349 |  0.444 |  1.307 |
 
-#### Build performance
+### Build performance
+
+These results measure index construction from the base dataset.
 
 Build-time memory is higher because `memory_usage_bytes()` counts `Vec::capacity()`, not `.len()`.
 
 During incremental construction, `Vec`s over-allocate and leave some spare capacity.
 After loading from disk, `bincode2` reconstructs with exact capacity, so the unused capacity is gone.
 
-| Dataset   |   M |  M0 | ef_construction | ef_search | build s | inserts/s | build memory MiB |
-| --------- | --: | --: | --------------: | --------: | ------: | --------: | ---------------: |
-| SIFT-1M   |  16 |  32 |             128 |        32 | 206.685 |      4838 |          1042.83 |
-| SIFT-1M   |  16 |  32 |             128 |        64 | 206.481 |      4843 |          1042.83 |
-| SIFT-1M   |  32 |  64 |             200 |        64 | 382.948 |      2611 |          1224.88 |
-| SIFT-1M   |  32 |  64 |             200 |       128 | 397.282 |      2517 |          1224.88 |
-| MNIST-60k |  16 |  32 |             128 |        32 |  17.760 |      3378 |           222.27 |
-| MNIST-60k |  16 |  32 |             128 |        64 |  17.990 |      3335 |           222.27 |
-| MNIST-60k |  32 |  64 |             200 |        64 |  28.616 |      2097 |           227.42 |
-| MNIST-60k |  32 |  64 |             200 |       128 |  28.888 |      2077 |           227.42 |
+| Dataset   |   M |  M0 | ef_construction | build s | inserts/s | build memory MiB |
+| --------- | --: | --: | --------------: | ------: | --------: | ---------------: |
+| SIFT-1M   |  16 |  32 |             128 | 206.481 |      4843 |          1042.83 |
+| SIFT-1M   |  32 |  64 |             200 | 382.948 |      2611 |          1224.88 |
+| SIFT-1M   |  32 |  64 |             200 | 397.282 |      2517 |          1224.88 |
+| MNIST-60k |  16 |  32 |             128 |  17.760 |      3378 |           222.27 |
+| MNIST-60k |  16 |  32 |             128 |  17.990 |      3335 |           222.27 |
+| MNIST-60k |  32 |  64 |             200 |  28.616 |      2097 |           227.42 |
+| MNIST-60k |  32 |  64 |             200 |  28.888 |      2077 |           227.42 |
 
 ### Config file
 
@@ -301,7 +279,7 @@ impl<const D: usize> Distance<D> for Cosine {
 let mut index = Hnsw::<128, Cosine>::new(16, 32, 128, 32, Cosine);
 ```
 
-`new_seeded` also accept custom distances.
+`new_seeded` also accepts custom distances.
 `new_default` is available when the distance type implements `Default`.
 
 ### Reusable contexts
