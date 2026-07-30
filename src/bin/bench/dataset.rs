@@ -1,5 +1,77 @@
+use super::{BenchFile, helpers::compute_ground_truth};
 use hdf5::{Dataset, File};
 use std::error::Error;
+
+const DEFAULT_BASE_DATASETS: &[&str] = &["train", "base"];
+const DEFAULT_QUERY_DATASETS: &[&str] = &["test", "query", "queries"];
+const DEFAULT_GROUND_TRUTH_DATASETS: &[&str] = &["neighbors", "knns", "groundtruth"];
+
+pub(crate) struct BenchData<const DIM: usize> {
+    pub(crate) base_name: String,
+    pub(crate) query_name: String,
+    pub(crate) base: Vec<[f32; DIM]>,
+    pub(crate) queries: Vec<[f32; DIM]>,
+    pub(crate) ground_truth: Vec<Vec<usize>>,
+    pub(crate) k: usize,
+}
+
+pub(crate) fn load_bench_data<const DIM: usize>(
+    config: &BenchFile,
+) -> Result<BenchData<DIM>, Box<dyn Error>> {
+    let file = File::open(&config.dataset_path)?;
+    let base_dataset_names = dataset_names(config.base_datasets.as_deref(), DEFAULT_BASE_DATASETS);
+    let query_dataset_names =
+        dataset_names(config.query_datasets.as_deref(), DEFAULT_QUERY_DATASETS);
+    let ground_truth_dataset_names = dataset_names(
+        config.ground_truth_datasets.as_deref(),
+        DEFAULT_GROUND_TRUTH_DATASETS,
+    );
+    let (base_name, base_dataset) = open_dataset(&file, &base_dataset_names)?;
+    let (query_name, query_dataset) = open_dataset(&file, &query_dataset_names)?;
+
+    let base = load_vectors::<DIM>(&base_name, &base_dataset, config.base_limit)?;
+    let queries = load_vectors::<DIM>(&query_name, &query_dataset, config.query_limit)?;
+
+    if base.is_empty() {
+        return Err("base dataset is empty".into());
+    }
+    if queries.is_empty() {
+        return Err("query dataset is empty".into());
+    }
+
+    let k = config.top_k.min(base.len());
+    let ground_truth = match open_optional_dataset(&file, &ground_truth_dataset_names) {
+        Some((name, dataset)) if config.base_limit.is_none() => {
+            println!("using ground truth dataset '{name}'");
+            load_ground_truth(&name, &dataset, queries.len(), k)?
+        }
+        Some((name, _)) => {
+            println!(
+                "ignoring ground truth dataset '{name}' because base_limit is set; computing exact recall for the truncated base set"
+            );
+            compute_ground_truth(&base, &queries, k)
+        }
+        None => {
+            println!("no ground truth dataset found; computing exact recall with brute force");
+            compute_ground_truth(&base, &queries, k)
+        }
+    };
+
+    Ok(BenchData {
+        base_name,
+        query_name,
+        base,
+        queries,
+        ground_truth,
+        k,
+    })
+}
+
+fn dataset_names<'a>(configured: Option<&'a [String]>, defaults: &[&'a str]) -> Vec<&'a str> {
+    configured
+        .map(|names| names.iter().map(String::as_str).collect())
+        .unwrap_or_else(|| defaults.to_vec())
+}
 
 pub(crate) fn open_dataset(
     file: &File,
