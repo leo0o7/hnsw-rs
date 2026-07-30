@@ -9,15 +9,18 @@ use helpers::{compute_ground_truth, duration_average, mib, ms, percentile, recal
 use hnsw::{Hnsw, HnswSearcher, L2Squared};
 use pq::ProductQuantizer;
 use rayon::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     error::Error,
+    fs,
     hint::black_box,
+    path::Path,
     time::{Duration, Instant},
 };
 
 const DEFAULT_CONFIG_PATH: &str = "bench-config.toml";
+const BENCHMARK_REPORT_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_BASE_DATASETS: &[&str] = &["train", "base"];
 const DEFAULT_QUERY_DATASETS: &[&str] = &["test", "query", "queries"];
 const DEFAULT_GROUND_TRUTH_DATASETS: &[&str] = &["neighbors", "knns", "groundtruth"];
@@ -37,11 +40,12 @@ struct BenchFile {
     base_datasets: Option<Vec<String>>,
     query_datasets: Option<Vec<String>>,
     ground_truth_datasets: Option<Vec<String>>,
+    output_json: Option<String>,
     quantized: Option<QuantizedConfig>,
     configs: Vec<BenchConfig>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 struct QuantizedConfig {
     quantizers: usize,
     pq_k: usize,
@@ -84,6 +88,83 @@ struct Metrics {
     p90: Duration,
     p99: Duration,
     max_latency: Duration,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkReport {
+    schema_version: u32,
+    dataset_path: String,
+    dimension: usize,
+    base_count: usize,
+    query_count: usize,
+    query_limit: Option<usize>,
+    base_limit: Option<usize>,
+    top_k: usize,
+    effective_k: usize,
+    quantization_setting: Option<&'static str>,
+    pq: Option<PqReport>,
+    runs: Vec<BenchmarkRun>,
+}
+
+#[derive(Debug, Serialize)]
+struct PqReport {
+    quantizers: usize,
+    pq_k: usize,
+    fit_time_s: f64,
+    encode_time_s: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkRun {
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    measured_query_count: usize,
+    memory_bytes: usize,
+    memory_mib: f64,
+    recall: f64,
+    qps: f64,
+    avg_latency_ms: f64,
+    p50_ms: f64,
+    p90_ms: f64,
+    p99_ms: f64,
+    max_ms: f64,
+    build_time_s: Option<f64>,
+    insert_qps: Option<f64>,
+    load_time_s: Option<f64>,
+    load_path: Option<String>,
+    save_time_s: Option<f64>,
+    save_path: Option<String>,
+    pq_oracle_recall: Option<f64>,
+}
+
+impl BenchmarkRun {
+    fn from_metrics(params: BenchConfig, metrics: &Metrics) -> Self {
+        Self {
+            m: params.m,
+            m0: params.m0,
+            ef_construction: params.ef_construction,
+            ef_search: params.ef_search,
+            measured_query_count: metrics.query_count,
+            memory_bytes: metrics.memory_bytes,
+            memory_mib: mib(metrics.memory_bytes),
+            recall: metrics.recall,
+            qps: metrics.qps,
+            avg_latency_ms: ms(metrics.avg_latency),
+            p50_ms: ms(metrics.p50),
+            p90_ms: ms(metrics.p90),
+            p99_ms: ms(metrics.p99),
+            max_ms: ms(metrics.max_latency),
+            build_time_s: duration_seconds(metrics.build_time),
+            insert_qps: metrics.insert_qps,
+            load_time_s: duration_seconds(metrics.load_time),
+            load_path: metrics.load_path.clone(),
+            save_time_s: duration_seconds(metrics.save_time),
+            save_path: metrics.save_path.clone(),
+            pq_oracle_recall: metrics.pq_oracle_recall,
+        }
+    }
 }
 
 struct BenchData<const DIM: usize> {
@@ -169,6 +250,7 @@ fn run<const DIM: usize, const Q: usize>(
     };
     print_header(config, &data, quantized, pq_data.as_ref());
 
+    let mut runs = Vec::with_capacity(config.configs.len());
     for params in config.configs.iter().copied() {
         let metrics = run_benchmark::<DIM, Q>(
             &data.base,
@@ -181,8 +263,54 @@ fn run<const DIM: usize, const Q: usize>(
             pq_data.as_ref(),
         )?;
         print_metrics(params, data.k, &metrics);
+        runs.push(BenchmarkRun::from_metrics(params, &metrics));
     }
 
+    if let Some(output_json) = config.output_json.as_deref() {
+        let report = BenchmarkReport {
+            schema_version: BENCHMARK_REPORT_SCHEMA_VERSION,
+            dataset_path: config.dataset_path.clone(),
+            dimension: DIM,
+            base_count: data.base.len(),
+            query_count: data.queries.len(),
+            query_limit: config.query_limit,
+            base_limit: config.base_limit,
+            top_k: config.top_k,
+            effective_k: data.k,
+            quantization_setting: quantized.map(|_| "pq"),
+            pq: match (quantized, pq_data.as_ref()) {
+                (Some(quantized), Some(pq_data)) => Some(PqReport {
+                    quantizers: quantized.quantizers,
+                    pq_k: quantized.pq_k,
+                    fit_time_s: pq_data.fit_time.as_secs_f64(),
+                    encode_time_s: pq_data.encode_time.as_secs_f64(),
+                }),
+                _ => None,
+            },
+            runs,
+        };
+        write_json_report(output_json, &report)?;
+        println!("wrote benchmark JSON: {output_json}");
+    }
+
+    Ok(())
+}
+
+fn duration_seconds(duration: Option<Duration>) -> Option<f64> {
+    duration.map(|duration| duration.as_secs_f64())
+}
+
+fn write_json_report(path: &str, report: &BenchmarkReport) -> Result<(), Box<dyn Error>> {
+    let path = Path::new(path);
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+
+    let json = serde_json::to_string_pretty(report)?;
+    fs::write(path, format!("{json}\n"))?;
     Ok(())
 }
 

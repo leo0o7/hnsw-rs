@@ -212,6 +212,7 @@ The fields describe the dataset and how the benchmark should run:
 - `query_limit = 1000`
 - `query_cycles = 100`
 - `load_index_prefix = "data/index/sift-128-euclidean-1MLN"`
+- `output_json = "path/to/output_results.json"` (optional)
 
 There are optional dataset-name fields too.
 If they are not set, the runner tries common names like `train`/`base` for vectors, `test`/`query`/`queries` for queries, and `neighbors`/`knns`/`groundtruth` for the expected nearest neighbors.
@@ -229,6 +230,8 @@ ef_search = 32
 
 If `load_index_prefix` is set, the benchmark loads matching index files from disk.
 If `save_index_prefix` is set instead, it builds the index from the base dataset and writes it to disk after construction.
+If `output_json` is set, the runner writes one pretty-printed JSON report after
+all configured runs complete successfully. Console output remains unchanged.
 
 ## How it works
 
