@@ -43,13 +43,12 @@ Measured on an Apple M3 Pro with saved indexes loaded from disk.
 ## Usage
 
 ```rust
-use hnsw::{Hnsw, L2Squared};
+use hnsw::{Hnsw, HnswSearcher, L2Squared};
 
 let mut index = Hnsw::<2>::new(
     16,  // M: max links on upper layers
     32,  // M0: max links on layer 0
     128, // ef_construction: candidate list size during insertion
-    32,  // ef_search: candidate list size during search
     L2Squared,
 );
 
@@ -57,7 +56,7 @@ index.insert([0.0, 0.0]);
 index.insert([3.0, 3.0]);
 index.insert([4.0, 4.0]);
 
-let results = index.search(&[1.0, 1.0], 2);
+let results = index.search_with_ef(&[1.0, 1.0], 2, 32);
 
 for (id, dist) in results {
     println!("id: {id}, dist²: {dist:.3}");
@@ -74,7 +73,9 @@ let mut index = Hnsw::<128>::new_default(16);
 
 - `M0 = 2 * M`
 - `ef_construction = 128`
-- `ef_search = 32`
+- default query search effort is `ef_search = 32`
+
+Search effort is query configuration, not index state. The default `search(query, k)` uses `ef_search = 32`; use `search_with_ef` when a query needs a different effort.
 
 ## Benchmarking
 
@@ -225,8 +226,9 @@ Each one produces or loads a separate index using the same filename pattern:
 m = 16
 m0 = 32
 ef_construction = 128
-ef_search = 32
 ```
+
+The top-level `ef_searches` field is a query-time sweep. Each value is measured against every graph configuration.
 
 If `load_index_prefix` is set, the benchmark loads matching index files from disk.
 If `save_index_prefix` is set instead, it builds the index from the base dataset and writes it to disk after construction.
@@ -269,7 +271,7 @@ By default, the index uses squared L2 distance, but any metric that implements `
 use hnsw::{Distance, Hnsw, L2Squared};
 
 // default L2Squared
-let mut index = Hnsw::<128>::new(16, 32, 128, 32, L2Squared);
+let mut index = Hnsw::<128>::new(16, 32, 128, L2Squared);
 
 // custom metric
 struct Cosine;
@@ -279,7 +281,7 @@ impl<const D: usize> Distance<D> for Cosine {
         todo!()
     }
 }
-let mut index = Hnsw::<128, Cosine>::new(16, 32, 128, 32, Cosine);
+let mut index = Hnsw::<128, Cosine>::new(16, 32, 128, Cosine);
 ```
 
 `new_seeded` also accepts custom distances.
@@ -301,7 +303,7 @@ But benchmark code uses the context versions:
 
 ```rust
 let mut search_ctx = index.search_context();
-let results = index.search_with_context(&query, 10, &mut search_ctx);
+let results = index.search_with_context(&query, 10, 64, &mut search_ctx);
 ```
 
 ### Epoch markers instead of clearing visited arrays
@@ -324,6 +326,7 @@ index.save("index.bin")?;
 let loaded = Hnsw::<128>::load("index.bin")?;
 ```
 
+Saved indexes contain graph construction state and data, but not query-time search configuration. Choose `ef_search` for each query with `search_with_ef`.
 The random seed is stored too.
 When an index is loaded, the RNG is advanced by the number of already-inserted vectors so that continuing insertion behaves the same as it would have before saving.
 
