@@ -20,7 +20,8 @@ pub struct InsertContext {
 }
 
 impl SearchContext {
-    pub(crate) fn init(cap: usize) -> Self {
+    pub(crate) fn with_capacity(cap: usize) -> Self {
+        assert!(cap > 0, "search context capacity must be > 0");
         Self {
             frontier: BinaryHeap::new(),
             best: BinaryHeap::with_capacity(cap),
@@ -40,6 +41,12 @@ impl SearchContext {
         }
         self.results.reverse();
         &self.results
+    }
+}
+
+impl Default for SearchContext {
+    fn default() -> Self {
+        Self::with_capacity(32)
     }
 }
 

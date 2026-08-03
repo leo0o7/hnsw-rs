@@ -23,7 +23,6 @@ pub struct Hnsw<const D: usize, DS = L2Squared> {
     M: usize,
     M0: usize,
     pub(crate) ef_construction: usize,
-    ef_search: usize,
     pub(crate) entry_point: usize,
     pub(crate) data: Vec<[f32; D]>,
     pub(crate) nodes: Vec<Node>,
@@ -36,14 +35,25 @@ pub struct Hnsw<const D: usize, DS = L2Squared> {
 }
 
 pub trait HnswSearcher<const D: usize> {
-    fn search_context(&self) -> SearchContext;
+    fn search_context(&self) -> SearchContext {
+        SearchContext::default()
+    }
 
-    fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)>;
+    fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
+        self.search_with_ef(q, k, 32)
+    }
+
+    fn search_with_ef(&self, q: &[f32; D], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
+        assert!(ef_search > 0, "ef_search must be > 0");
+        let mut ctx = SearchContext::with_capacity(ef_search);
+        self.search_with_context(q, k, ef_search, &mut ctx)
+    }
 
     fn search_with_context(
         &self,
         q: &[f32; D],
         k: usize,
+        ef_search: usize,
         ctx: &mut SearchContext,
     ) -> Vec<(usize, f32)>;
 
@@ -55,25 +65,16 @@ where
     DS: Distance<D>,
 {
     #[allow(non_snake_case)]
-    pub fn new_seeded(
-        M: usize,
-        M0: usize,
-        ef_construction: usize,
-        ef_search: usize,
-        seed: u64,
-        dist: DS,
-    ) -> Self {
+    pub fn new_seeded(M: usize, M0: usize, ef_construction: usize, seed: u64, dist: DS) -> Self {
         assert!(M > 1, "M must be > 1");
         assert!(M0 > 0, "M0 must be > 0");
         assert!(ef_construction > 0, "ef_construction must be > 0");
-        assert!(ef_search > 0, "ef_search must be > 0");
 
         let ml = 1.0 / (M as f64).ln();
         Self {
             M,
             M0,
             ef_construction,
-            ef_search,
             entry_point: 0,
             data: Vec::new(),
             nodes: Vec::new(),
@@ -87,15 +88,15 @@ where
     }
 
     #[allow(non_snake_case)]
-    pub fn new(M: usize, M0: usize, ef_construction: usize, ef_search: usize, dist: DS) -> Self {
+    pub fn new(M: usize, M0: usize, ef_construction: usize, dist: DS) -> Self {
         let seed = rand::rng().next_u64();
-        Self::new_seeded(M, M0, ef_construction, ef_search, seed, dist)
+        Self::new_seeded(M, M0, ef_construction, seed, dist)
     }
 
     pub fn insert_context(&self) -> InsertContext {
         InsertContext {
             select_ctx: SelectContext::init(self.M0),
-            search_ctx: SearchContext::init(self.ef_construction),
+            search_ctx: SearchContext::with_capacity(self.ef_construction),
         }
     }
 
@@ -227,7 +228,7 @@ where
             }
         }
 
-        self.avoid_epoch_overflow();
+        avoid_epoch_overflow(&self.epoch, &self.nodes);
         ctx.consume_best()
     }
 
@@ -280,7 +281,7 @@ where
             }
         }
 
-        self.avoid_epoch_overflow();
+        avoid_epoch_overflow(&self.epoch, &self.nodes);
         // no pruning required
         if pq.len() <= max_connections {
             return ctx.consume_pq();
@@ -369,18 +370,6 @@ where
         (-x.ln() * self.ml).floor() as usize
     }
 
-    #[inline(always)]
-    /// very unlikely to ever be required
-    /// this can happen only after 2^64 - 1 epochs
-    fn avoid_epoch_overflow(&self) {
-        if self.epoch.get() == usize::MAX {
-            self.epoch.set(0);
-            for node in self.nodes.iter() {
-                node.epoch.set(0);
-            }
-        }
-    }
-
     pub fn len(&self) -> usize {
         self.data.len()
     }
@@ -390,13 +379,23 @@ where
     }
 }
 
+#[inline(always)]
+fn avoid_epoch_overflow(epoch: &Cell<usize>, nodes: &[Node]) {
+    if epoch.get() == usize::MAX {
+        epoch.set(0);
+        for node in nodes {
+            node.epoch.set(0);
+        }
+    }
+}
+
 impl<const D: usize, DS> Hnsw<D, DS>
 where
     DS: Distance<D> + Default,
 {
     #[allow(non_snake_case)]
     pub fn new_default(M: usize) -> Self {
-        Self::new(M, 2 * M, 128, 32, DS::default())
+        Self::new(M, 2 * M, 128, DS::default())
     }
 }
 
@@ -404,21 +403,14 @@ impl<const D: usize, DS> HnswSearcher<D> for Hnsw<D, DS>
 where
     DS: Distance<D>,
 {
-    fn search_context(&self) -> SearchContext {
-        SearchContext::init(self.ef_search)
-    }
-
-    fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
-        let mut ctx = self.search_context();
-        self.search_with_context(q, k, &mut ctx)
-    }
-
     fn search_with_context(
         &self,
         q: &[f32; D],
         k: usize,
+        ef_search: usize,
         ctx: &mut SearchContext,
     ) -> Vec<(usize, f32)> {
+        assert!(ef_search > 0, "ef_search must be > 0");
         if self.data.is_empty() {
             return Vec::new();
         }
@@ -434,7 +426,7 @@ where
                 .node_index;
         }
 
-        let results = self.search_layer_with_context(q, ep, 0, self.ef_search.max(k), ctx);
+        let results = self.search_layer_with_context(q, ep, 0, ef_search.max(k), ctx);
         // take k best from final layer search
         results[..k.min(results.len())]
             .iter()

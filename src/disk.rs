@@ -25,7 +25,6 @@ struct SerializedHnsw<DS> {
     M: usize,
     M0: usize,
     ef_construction: usize,
-    ef_search: usize,
     entry_point: usize,
     data: Vec<Vec<f32>>,
     nodes: Vec<Node>,
@@ -78,11 +77,10 @@ where
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("Hnsw", 11)?;
+        let mut state = serializer.serialize_struct("Hnsw", 9)?;
         state.serialize_field("M", &(self.M as u64))?;
         state.serialize_field("M0", &(self.M0 as u64))?;
         state.serialize_field("ef_construction", &(self.ef_construction as u64))?;
-        state.serialize_field("ef_search", &(self.ef_search as u64))?;
         state.serialize_field("entry_point", &(self.entry_point as u64))?;
         state.serialize_field("data", &FlatF32::from(self.data.as_slice()))?;
         state.serialize_field("nodes", &self.nodes)?;
@@ -125,7 +123,6 @@ where
             M: disk.M,
             M0: disk.M0,
             ef_construction: disk.ef_construction,
-            ef_search: disk.ef_search,
             entry_point: disk.entry_point,
             data,
             nodes: disk.nodes,

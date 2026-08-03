@@ -9,7 +9,6 @@ use std::{cell::Cell, cmp::Reverse, mem::size_of};
 
 #[allow(non_snake_case)]
 pub struct FrozenPQHnsw<const D: usize, const Q: usize> {
-    ef_search: usize,
     entry_point: usize,
     data: Vec<[u8; Q]>,
     nodes: Vec<Node>,
@@ -26,11 +25,10 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
     ) -> Self {
         assert_eq!(
             quantized_data.len(),
-            hnsw.len(),
+            hnsw.nodes.len(),
             "quantized data length must match HNSW index length"
         );
         Self {
-            ef_search: hnsw.ef_search,
             entry_point: hnsw.entry_point,
             data: quantized_data,
             nodes: hnsw.nodes,
@@ -101,20 +99,8 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
             }
         }
 
-        self.avoid_epoch_overflow();
+        crate::avoid_epoch_overflow(&self.epoch, &self.nodes);
         ctx.consume_best()
-    }
-
-    #[inline(always)]
-    /// very unlikely to ever be required
-    /// this can happen only after 2^64 - 1 epochs
-    fn avoid_epoch_overflow(&self) {
-        if self.epoch.get() == usize::MAX {
-            self.epoch.set(0);
-            for node in self.nodes.iter() {
-                node.epoch.set(0);
-            }
-        }
     }
 
     pub fn brute_force_adc(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
@@ -145,21 +131,14 @@ impl<const D: usize> Hnsw<D, L2Squared> {
 }
 
 impl<const D: usize, const Q: usize> HnswSearcher<D> for FrozenPQHnsw<D, Q> {
-    fn search_context(&self) -> SearchContext {
-        SearchContext::init(self.ef_search)
-    }
-
-    fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
-        let mut ctx = self.search_context();
-        self.search_with_context(q, k, &mut ctx)
-    }
-
     fn search_with_context(
         &self,
         q: &[f32; D],
         k: usize,
+        ef_search: usize,
         ctx: &mut SearchContext,
     ) -> Vec<(usize, f32)> {
+        assert!(ef_search > 0, "ef_search must be > 0");
         if self.data.is_empty() {
             return Vec::new();
         }
@@ -176,7 +155,7 @@ impl<const D: usize, const Q: usize> HnswSearcher<D> for FrozenPQHnsw<D, Q> {
                 .node_index;
         }
 
-        let results = self.search_layer_with_context(&adc, ep, 0, self.ef_search.max(k), ctx);
+        let results = self.search_layer_with_context(&adc, ep, 0, ef_search.max(k), ctx);
         // take k best from final layer search
         results[..k.min(results.len())]
             .iter()

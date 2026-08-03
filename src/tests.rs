@@ -111,9 +111,44 @@ fn test_empty_graph() {
 }
 
 #[test]
+#[should_panic(expected = "ef_search must be > 0")]
+fn search_with_ef_rejects_zero_effort() {
+    let index = Hnsw::<2>::new_default(2);
+    index.search_with_ef(&[0.0, 0.0], 1, 0);
+}
+
+#[test]
+fn default_search_matches_explicit_default_ef() {
+    let mut index = Hnsw::<2>::new_seeded(4, 8, 16, 42, L2Squared);
+    for point in [[0.0, 0.0], [1.0, 1.0], [3.0, 3.0], [4.0, 4.0]] {
+        index.insert(point);
+    }
+
+    let query = [1.2, 1.2];
+    assert_eq!(index.search(&query, 3), index.search_with_ef(&query, 3, 32));
+
+    let mut context = index.search_context();
+    assert_eq!(
+        index.search_with_context(&query, 3, 64, &mut context),
+        index.search_with_ef(&query, 3, 64)
+    );
+}
+
+#[test]
+fn pq_search_accepts_explicit_ef() {
+    let mut index = Hnsw::<2>::new_seeded(4, 8, 16, 42, L2Squared);
+    for point in [[0.0, 0.0], [1.0, 1.0], [3.0, 3.0], [4.0, 4.0]] {
+        index.insert(point);
+    }
+
+    let frozen = index.freeze::<1>(1);
+    let results = frozen.search_with_ef(&[1.2, 1.2], 2, 8);
+    assert_eq!(results.len(), 2);
+}
+
+#[test]
 fn custom_distance_controls_search_order() {
-    let mut knn =
-        Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
+    let mut knn = Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
     knn.insert([10.0, 0.0]);
     knn.insert([0.0, 2.0]);
     knn.insert([0.0, 3.0]);
@@ -127,7 +162,7 @@ fn custom_distance_controls_search_order() {
 fn stateful_distance_survives_save_load() {
     let path = temp_path("weighted-distance");
     let mut original =
-        Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
+        Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
     original.insert([10.0, 0.0]);
     original.insert([0.0, 2.0]);
     original.insert([0.0, 3.0]);
@@ -158,7 +193,7 @@ fn test_save_load_roundtrip_search_and_insert() {
     let path = temp_path("roundtrip");
     let query = [1.0, 1.0];
 
-    let mut original = Hnsw::<2>::new_seeded(5, 10, 128, 32, 42, L2Squared);
+    let mut original = Hnsw::<2>::new_seeded(5, 10, 128, 42, L2Squared);
     original.insert([0.0, 0.0]);
     original.insert([3.0, 3.0]);
     original.insert([4.0, 4.0]);
