@@ -6,6 +6,8 @@ query_limit = 1000
 query_cycles = 100
 load_index_prefix = "data/index/sift-128-euclidean-1MLN"
 seed = 42
+ef_searches = [32, 64, 128]
+# output_json = "data/results/sift-1m.json"
 
 # base_limit = 100000
 # save_index_prefix = "data/index/sift-128-euclidean-1MLN"
@@ -24,22 +26,18 @@ seed = 42
 m = 16
 m0 = 32
 ef_construction = 128
-ef_search = 32
 
 [[configs]]
 m = 16
 m0 = 32
 ef_construction = 128
-ef_search = 64
 
 [[configs]]
 m = 32
 m0 = 64
 ef_construction = 200
-ef_search = 64
 
 [[configs]]
 m = 32
 m0 = 64
 ef_construction = 200
-ef_search = 128

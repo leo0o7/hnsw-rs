@@ -6,10 +6,11 @@ use rayon::prelude::*;
 use std::{
     error::Error,
     hint::black_box,
+    path::Path,
     time::{Duration, Instant},
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct IndexTimings {
     pub(crate) build_time: Option<Duration>,
     pub(crate) insert_qps: Option<f64>,
@@ -71,10 +72,11 @@ pub(crate) fn precompute_pq<const DIM: usize, const Q: usize>(
 pub(crate) fn run_benchmark<const DIM: usize, const Q: usize>(
     data: &BenchData<DIM>,
     params: BenchConfig,
+    ef_searches: &[usize],
     config: &BenchFile,
     quantized: Option<QuantizedConfig>,
     pq_data: Option<&PqBenchData<DIM, Q>>,
-) -> Result<Metrics, Box<dyn Error>> {
+) -> Result<Vec<SearchRun>, Box<dyn Error>> {
     let (index, timings) = prepare_index(&data.base, params, config)?;
 
     if let Some(quantized) = quantized {
@@ -97,15 +99,23 @@ pub(crate) fn run_benchmark<const DIM: usize, const Q: usize>(
             None
         };
 
-        Ok(measure_index(
+        Ok(measure_search_sweep(
             &index,
-            timings,
+            &timings,
             data,
             config,
+            ef_searches,
             pq_oracle_recall,
         ))
     } else {
-        Ok(measure_index(&index, timings, data, config, None))
+        Ok(measure_search_sweep(
+            &index,
+            &timings,
+            data,
+            config,
+            ef_searches,
+            None,
+        ))
     }
 }
 
@@ -148,7 +158,6 @@ fn prepare_index<const DIM: usize>(
                 params.m,
                 params.m0,
                 params.ef_construction,
-                params.ef_search,
                 config.seed.unwrap_or(42),
                 L2Squared,
             );
@@ -176,6 +185,12 @@ fn prepare_index<const DIM: usize>(
 
     if let Some(prefix) = config.save_index_prefix.as_deref() {
         let path = params.index_path(prefix, DIM);
+        if let Some(parent) = Path::new(&path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
         let save_start = Instant::now();
         index.save(&path)?;
         timings.save_path = Some(path);
@@ -185,11 +200,41 @@ fn prepare_index<const DIM: usize>(
     Ok((index, timings))
 }
 
+pub(crate) struct SearchRun {
+    pub(crate) ef_search: usize,
+    pub(crate) metrics: Metrics,
+}
+
+fn measure_search_sweep<const DIM: usize, S: HnswSearcher<DIM>>(
+    index: &S,
+    timings: &IndexTimings,
+    data: &BenchData<DIM>,
+    config: &BenchFile,
+    ef_searches: &[usize],
+    pq_oracle_recall: Option<f64>,
+) -> Vec<SearchRun> {
+    ef_searches
+        .iter()
+        .map(|&ef_search| SearchRun {
+            ef_search,
+            metrics: measure_index(
+                index,
+                timings.clone(),
+                data,
+                config,
+                ef_search,
+                pq_oracle_recall,
+            ),
+        })
+        .collect()
+}
+
 fn measure_index<const DIM: usize, S: HnswSearcher<DIM>>(
     index: &S,
     timings: IndexTimings,
     data: &BenchData<DIM>,
     config: &BenchFile,
+    ef_search: usize,
     pq_oracle_recall: Option<f64>,
 ) -> Metrics {
     let memory_bytes = index.memory_usage_bytes();
@@ -200,7 +245,7 @@ fn measure_index<const DIM: usize, S: HnswSearcher<DIM>>(
         &data.ground_truth,
         warmup,
         config.query_cycles(),
-        |query| index.search_with_context(query, data.k, &mut search_ctx),
+        |query| index.search_with_context(query, data.k, ef_search, &mut search_ctx),
     );
 
     Metrics {

@@ -58,12 +58,12 @@ pub(crate) struct RunReport {
     pq_oracle_recall: Option<f64>,
 }
 
-pub(crate) fn run_entry(params: BenchConfig, metrics: &Metrics) -> RunReport {
+pub(crate) fn run_entry(params: BenchConfig, ef_search: usize, metrics: &Metrics) -> RunReport {
     RunReport {
         m: params.m,
         m0: params.m0,
         ef_construction: params.ef_construction,
-        ef_search: params.ef_search,
+        ef_search,
         measured_query_count: metrics.query.query_count,
         memory_bytes: metrics.memory_bytes,
         memory_mib: mib(metrics.memory_bytes),
@@ -159,33 +159,41 @@ pub(crate) fn print_header<const DIM: usize, const Q: usize>(
     println!();
 }
 
-pub(crate) fn print_metrics(params: BenchConfig, k: usize, metrics: &Metrics) {
+pub(crate) fn print_metrics(
+    params: BenchConfig,
+    ef_search: usize,
+    k: usize,
+    metrics: &Metrics,
+    print_index_timings: bool,
+) {
     let index = &metrics.index;
     let query = &metrics.query;
 
     println!(
         "M={} M0={} ef_construction={} ef_search={}",
-        params.m, params.m0, params.ef_construction, params.ef_search
+        params.m, params.m0, params.ef_construction, ef_search
     );
-    if let Some(load_time) = index.load_time {
-        if let Some(path) = &index.load_path {
-            println!("  load: {:.3}s ({path})", load_time.as_secs_f64());
-        } else {
-            println!("  load: {:.3}s", load_time.as_secs_f64());
+    if print_index_timings {
+        if let Some(load_time) = index.load_time {
+            if let Some(path) = &index.load_path {
+                println!("  load: {:.3}s ({path})", load_time.as_secs_f64());
+            } else {
+                println!("  load: {:.3}s", load_time.as_secs_f64());
+            }
         }
-    }
-    if let (Some(build_time), Some(insert_qps)) = (index.build_time, index.insert_qps) {
-        println!(
-            "  build: {:.3}s ({:.0} inserts/s)",
-            build_time.as_secs_f64(),
-            insert_qps,
-        );
-    }
-    if let Some(save_time) = index.save_time {
-        if let Some(path) = &index.save_path {
-            println!("  save: {:.3}s ({path})", save_time.as_secs_f64());
-        } else {
-            println!("  save: {:.3}s", save_time.as_secs_f64());
+        if let (Some(build_time), Some(insert_qps)) = (index.build_time, index.insert_qps) {
+            println!(
+                "  build: {:.3}s ({:.0} inserts/s)",
+                build_time.as_secs_f64(),
+                insert_qps,
+            );
+        }
+        if let Some(save_time) = index.save_time {
+            if let Some(path) = &index.save_path {
+                println!("  save: {:.3}s ({path})", save_time.as_secs_f64());
+            } else {
+                println!("  save: {:.3}s", save_time.as_secs_f64());
+            }
         }
     }
     println!(

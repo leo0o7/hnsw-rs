@@ -28,6 +28,7 @@ pub(crate) struct BenchFile {
     pub(crate) base_datasets: Option<Vec<String>>,
     pub(crate) query_datasets: Option<Vec<String>>,
     pub(crate) ground_truth_datasets: Option<Vec<String>>,
+    pub(crate) ef_searches: Vec<usize>,
     pub(crate) output_json: Option<String>,
     pub(crate) quantized: Option<QuantizedConfig>,
     pub(crate) configs: Vec<BenchConfig>,
@@ -41,19 +42,18 @@ pub(crate) struct QuantizedConfig {
     pub(crate) pq_oracle: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 pub(crate) struct BenchConfig {
     pub(crate) m: usize,
     pub(crate) m0: usize,
     pub(crate) ef_construction: usize,
-    pub(crate) ef_search: usize,
 }
 
 impl BenchConfig {
     pub(crate) fn index_path(self, prefix: &str, dimension: usize) -> String {
         format!(
-            "{prefix}-dim{dimension}-m{}-m0{}-efc{}-efs{}.bin",
-            self.m, self.m0, self.ef_construction, self.ef_search
+            "{prefix}-dim{dimension}-m{}-m0{}-efc{}.bin",
+            self.m, self.m0, self.ef_construction
         )
     }
 }
@@ -75,53 +75,94 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config: BenchFile = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
 
     // TODO: find some better way of doing this
-    match (config.dimension, config.quantized) {
-        (128, None) => run::<128, 0>(&config, None),
-        (784, None) => run::<784, 0>(&config, None),
-        (128, Some(quantized)) => match quantized.quantizers {
-            32 => run::<128, 32>(&config, Some(quantized)),
-            64 => run::<128, 64>(&config, Some(quantized)),
-            128 => run::<128, 128>(&config, Some(quantized)),
-            other => Err(unsupported_quantizers(other).into()),
-        },
-        (784, Some(quantized)) => match quantized.quantizers {
-            32 => run::<784, 32>(&config, Some(quantized)),
-            64 => run::<784, 64>(&config, Some(quantized)),
-            196 => run::<784, 196>(&config, Some(quantized)),
-            other => Err(unsupported_quantizers(other).into()),
-        },
-        other => Err(format!(
+    match config.dimension {
+        128 => run_dimension::<128>(&config),
+        784 => run_dimension::<784>(&config),
+        dimension => Err(format!(
             "unsupported dimension {}; add a match arm in src/bin/bench.rs",
-            other.0
+            dimension
         )
         .into()),
     }
 }
 
-fn unsupported_quantizers(quantizers: usize) -> String {
+fn run_dimension<const DIM: usize>(config: &BenchFile) -> Result<(), Box<dyn Error>> {
+    match config.quantized {
+        None => run::<DIM, 0>(config),
+        Some(quantized) => match quantized.quantizers {
+            32 => run::<DIM, 32>(config),
+            64 => run::<DIM, 64>(config),
+            128 if DIM == 128 => run::<DIM, 128>(config),
+            196 if DIM == 784 => run::<DIM, 196>(config),
+            other => Err(unsupported_quantizers(DIM, other).into()),
+        },
+    }
+}
+
+fn unsupported_quantizers(dimension: usize, quantizers: usize) -> String {
+    let supported = match dimension {
+        128 => "32, 64, 128",
+        784 => "32, 64, 196",
+        _ => "none",
+    };
     format!(
-        "unsupported quantizers {quantizers}; supported quantized bench values are 64 for 128D and 196 for 784D"
+        "unsupported quantizers {quantizers} for {dimension}D; supported values are {supported}"
     )
 }
 
-fn run<const DIM: usize, const Q: usize>(
-    config: &BenchFile,
-    quantized: Option<QuantizedConfig>,
-) -> Result<(), Box<dyn Error>> {
+fn validate_configs(configs: &[BenchConfig], ef_searches: &[usize]) -> Result<(), &'static str> {
+    if configs.is_empty() {
+        return Err("configs must contain at least one graph configuration");
+    }
+
+    if ef_searches.is_empty() || ef_searches.contains(&0) {
+        return Err("ef_searches must contain at least one positive value");
+    }
+    for (index, ef_search) in ef_searches.iter().enumerate() {
+        if ef_searches[..index].contains(ef_search) {
+            return Err("ef_searches must not contain duplicates");
+        }
+    }
+
+    for (index, params) in configs.iter().enumerate() {
+        if configs[..index].contains(params) {
+            return Err("configs must not contain duplicate graph configurations");
+        }
+    }
+
+    Ok(())
+}
+
+fn run<const DIM: usize, const Q: usize>(config: &BenchFile) -> Result<(), Box<dyn Error>> {
+    validate_configs(&config.configs, &config.ef_searches)?;
+    let quantized = config.quantized;
     let data = dataset::load_bench_data::<DIM>(config)?;
     let pq_data = quantized.map(|quantized| precompute_pq::<DIM, Q>(&data.base, quantized.pq_k));
     report::print_header(config, &data, quantized, pq_data.as_ref());
 
-    let mut runs = config
-        .output_json
-        .as_ref()
-        .map(|_| Vec::with_capacity(config.configs.len()));
+    let mut runs = config.output_json.as_ref().map(|_| {
+        Vec::with_capacity(
+            config
+                .configs
+                .len()
+                .saturating_mul(config.ef_searches.len()),
+        )
+    });
 
     for params in config.configs.iter().copied() {
-        let metrics = run_benchmark::<DIM, Q>(&data, params, config, quantized, pq_data.as_ref())?;
-        report::print_metrics(params, data.k, &metrics);
-        if let Some(runs) = &mut runs {
-            runs.push(report::run_entry(params, &metrics));
+        let metrics = run_benchmark::<DIM, Q>(
+            &data,
+            params,
+            &config.ef_searches,
+            config,
+            quantized,
+            pq_data.as_ref(),
+        )?;
+        for (run_index, run) in metrics.into_iter().enumerate() {
+            report::print_metrics(params, run.ef_search, data.k, &run.metrics, run_index == 0);
+            if let Some(runs) = &mut runs {
+                runs.push(report::run_entry(params, run.ef_search, &run.metrics));
+            }
         }
     }
 
@@ -138,4 +179,31 @@ fn run<const DIM: usize, const Q: usize>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BenchConfig, validate_configs};
+
+    fn config(m: usize) -> BenchConfig {
+        BenchConfig {
+            m,
+            m0: m * 2,
+            ef_construction: 200,
+        }
+    }
+
+    #[test]
+    fn accepts_distinct_graph_and_search_configurations() {
+        validate_configs(&[config(8), config(16)], &[16, 64]).expect("valid sweep");
+    }
+
+    #[test]
+    fn rejects_empty_or_zero_search_effort() {
+        assert!(validate_configs(&[], &[32]).is_err());
+        assert!(validate_configs(&[config(8)], &[]).is_err());
+        assert!(validate_configs(&[config(8)], &[0]).is_err());
+        assert!(validate_configs(&[config(8)], &[32, 32]).is_err());
+        assert!(validate_configs(&[config(8), config(8)], &[32]).is_err());
+    }
 }
