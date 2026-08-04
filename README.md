@@ -1,8 +1,5 @@
 # hnsw
 
-> [!NOTE]
-> This is mostly a learning project: the goal was to build the data structure by hand and get something that can be benchmarked on real ANN datasets
-
 **Hierarchical Navigable Small World** (HNSW) is an approximate nearest-neighbor index.
 Instead of comparing a query vector with every vector in the dataset, it builds a layered graph and uses that graph to quickly explore close candidates.
 
@@ -30,15 +27,6 @@ The tradeoff is the usual one for approximate search: searches are much faster t
 
 The goal is the HNSW data structure itself, not a full vector database.
 Also, this is not intended to replace production ANN libraries.
-
-## Benchmark summary
-
-Measured on an Apple M3 Pro with saved indexes loaded from disk.
-
-| Dataset         |   Best high-throughput result |      Best high-recall result |
-| --------------- | ----------------------------: | ---------------------------: |
-| SIFT-1M, 128d   | 13.4k QPS at 0.8897 recall@10 | 3.2k QPS at 0.9948 recall@10 |
-| MNIST-60k, 784d |  8.0k QPS at 0.9866 recall@10 | 2.4k QPS at 0.9998 recall@10 |
 
 ## Usage
 
@@ -77,163 +65,46 @@ let mut index = Hnsw::<128>::new_default(16);
 
 Search effort is query configuration, not index state. The default `search(query, k)` uses `ef_search = 32`; use `search_with_ef` when a query needs a different effort.
 
-## Benchmarking
+## Benchmarks
 
-There is a benchmark binary that reads a TOML config, loads an HDF5 dataset, then reports recall, QPS, and latency percentiles.
+Measured on an Apple M3 Pro with saved indexes loaded from disk.
 
-```sh
-cargo run --release --bin bench
-```
+| Dataset         |   Best high-throughput result |      Best high-recall result |
+| --------------- | ----------------------------: | ---------------------------: |
+| SIFT-1M, 128d   | 13.4k QPS at 0.8897 recall@10 | 3.2k QPS at 0.9948 recall@10 |
+| MNIST-60k, 784d |  8.0k QPS at 0.9866 recall@10 | 2.4k QPS at 0.9998 recall@10 |
 
-By default it reads:
+Search curves sweep `ef_search`. Higher values generally improve recall while reducing throughput. Search plots use _recall@10_ on the horizontal axis and _QPS_ on a logarithmic vertical axis, so points toward the upper right are better.
 
-```sh
-bench-config.toml
-```
+### Graph degree
 
-You can also pass a config path:
+![Search trade-off](benchmarks/plots/search_tradeoff.svg)
 
-```sh
-cargo run --release --bin bench -- path/to/config.toml
-```
+### Construction effort
 
-The benchmark runner can either build an index from the dataset or load an existing saved index, depending on whether `load_index_prefix` is set in the config.
+![Construction trade-off](benchmarks/plots/construction_tradeoff.svg)
 
-### Benchmark setup
+### Dataset-size scaling
 
-Build/run command:
-
-```sh
-RUSTFLAGS="-C target-cpu=native" cargo run --release --bin bench -- <config>.toml
-```
-
-Environment:
-
-- CPU: Apple M3 Pro
-- Memory: 18 GB
-- OS: macOS 15.6.1
-- Rust: rustc 1.95.0
-- Distance: squared L2
-- Metric: recall@10
-- Warmup queries: 100
-- Query cycles: 100
-- Measured queries: 90,000
-
-Datasets:
-
-| Dataset   | Path                            | Base vectors | Query vectors | Dim | Ground truth |
-| --------- | ------------------------------- | -----------: | ------------: | --: | ------------ |
-| SIFT-1M   | `data/sift-128-euclidean.hdf5`  |    1,000,000 |         1,000 | 128 | `neighbors`  |
-| MNIST-60k | `data/mnist-784-euclidean.hdf5` |       60,000 |         1,000 | 784 | `neighbors`  |
-
-### Query performance
-
-These results were measured with saved indexes loaded from disk.
-
-#### SIFT-1M
-
-|   M |  M0 | ef_construction | ef_search | load s | memory MiB | recall@10 |     QPS | avg ms | p50 ms | p90 ms | p99 ms | max ms |
-| --: | --: | --------------: | --------: | -----: | ---------: | --------: | ------: | -----: | -----: | -----: | -----: | -----: |
-|  16 |  32 |             128 |        32 |  0.528 |     872.46 |    0.8897 | 13444.5 |  0.074 |  0.075 |  0.090 |  0.109 |  0.361 |
-|  16 |  32 |             128 |        64 |  0.560 |     872.46 |    0.9564 |  7784.5 |  0.128 |  0.132 |  0.153 |  0.178 |  0.585 |
-|  32 |  64 |             200 |        64 |  0.638 |     999.03 |    0.9783 |  5743.7 |  0.174 |  0.180 |  0.217 |  0.252 |  0.849 |
-|  32 |  64 |             200 |       128 |  0.609 |     999.03 |    0.9948 |  3226.1 |  0.310 |  0.323 |  0.391 |  0.443 |  0.996 |
-
-#### MNIST-60k
-
-|   M |  M0 | ef_construction | ef_search | load s | memory MiB | recall@10 |    QPS | avg ms | p50 ms | p90 ms | p99 ms | max ms |
-| --: | --: | --------------: | --------: | -----: | ---------: | --------: | -----: | -----: | -----: | -----: | -----: | -----: |
-|  16 |  32 |             128 |        32 |  0.089 |     199.02 |    0.9866 | 8017.7 |  0.125 |  0.126 |  0.156 |  0.185 |  0.497 |
-|  16 |  32 |             128 |        64 |  0.089 |     199.02 |    0.9981 | 4849.5 |  0.206 |  0.209 |  0.261 |  0.311 |  0.756 |
-|  32 |  64 |             200 |        64 |  0.111 |     202.54 |    0.9986 | 3901.2 |  0.256 |  0.261 |  0.335 |  0.400 |  0.744 |
-|  32 |  64 |             200 |       128 |  0.107 |     202.54 |    0.9998 | 2413.7 |  0.414 |  0.421 |  0.552 |  0.657 |  1.425 |
+![Dataset-size scaling](benchmarks/plots/size_scaling.svg)
 
 ### Product quantization
 
-These results use frozen PQ indexes over the same saved HNSW graphs.
-PQ fit and encode are one-time preprocessing costs; search uses ADC distances over compressed vectors.
+![Product-quantization trade-off](benchmarks/plots/pq_tradeoff.svg)
 
-Each PQ subquantizer is trained with 256 centroids.
+### Detailed benchmark results
 
-#### SIFT-1M PQ
+Detailed results, configurations, and reproduction instructions are available in [`benchmarks/README.md`](benchmarks/README.md).
 
-| quantizers | pq fit s | pq encode s |   M |  M0 | ef_construction | ef_search | load s | memory MiB | recall@10 |     QPS | avg ms | p50 ms | p90 ms | p99 ms | max ms |
-| ---------: | -------: | ----------: | --: | --: | --------------: | --------: | -----: | ---------: | --------: | ------: | -----: | -----: | -----: | -----: | -----: |
-|         32 |   37.184 |       1.399 |  16 |  32 |             128 |        32 |  0.590 |     414.82 |    0.6821 | 13918.1 |  0.072 |  0.072 |  0.087 |  0.106 |  0.365 |
-|         32 |   37.184 |       1.399 |  16 |  32 |             128 |        64 |  0.574 |     414.82 |    0.7096 |  8314.7 |  0.120 |  0.122 |  0.142 |  0.178 |  0.620 |
-|         32 |   37.184 |       1.399 |  32 |  64 |             200 |        64 |  0.613 |     541.39 |    0.7157 |  6541.0 |  0.153 |  0.157 |  0.188 |  0.228 |  0.557 |
-|         32 |   37.184 |       1.399 |  32 |  64 |             200 |       128 |  0.595 |     541.39 |    0.7182 |  3739.2 |  0.267 |  0.276 |  0.335 |  0.395 |  0.786 |
-|         64 |   67.984 |       2.135 |  16 |  32 |             128 |        32 |  0.587 |     445.34 |    0.8319 |  9267.3 |  0.108 |  0.109 |  0.129 |  0.154 |  0.461 |
-|         64 |   67.984 |       2.135 |  16 |  32 |             128 |        64 |  0.566 |     445.34 |    0.8738 |  5700.6 |  0.175 |  0.180 |  0.208 |  0.239 |  1.501 |
-|         64 |   67.984 |       2.135 |  32 |  64 |             200 |        64 |  0.886 |     571.91 |    0.8873 |  4325.3 |  0.231 |  0.238 |  0.286 |  0.338 |  0.903 |
-|         64 |   67.984 |       2.135 |  32 |  64 |             200 |       128 |  0.595 |     571.91 |    0.8952 |  2530.4 |  0.395 |  0.408 |  0.499 |  0.575 |  1.704 |
-|        128 |  120.994 |       3.795 |  16 |  32 |             128 |        32 |  0.575 |     506.37 |    0.8897 |  6327.3 |  0.158 |  0.160 |  0.187 |  0.220 |  0.471 |
-|        128 |  120.994 |       3.795 |  16 |  32 |             128 |        64 |  0.575 |     506.37 |    0.9563 |  3970.5 |  0.252 |  0.259 |  0.298 |  0.334 |  0.730 |
-|        128 |  120.994 |       3.795 |  32 |  64 |             200 |        64 |  0.598 |     632.94 |    0.9782 |  2979.8 |  0.336 |  0.347 |  0.417 |  0.473 |  0.911 |
-|        128 |  120.994 |       3.795 |  32 |  64 |             200 |       128 |  0.597 |     632.94 |    0.9947 |  1751.0 |  0.571 |  0.595 |  0.725 |  0.808 |  1.821 |
+### Reproducing the benchmark
 
-#### MNIST-60k PQ
+Run the complete benchmark suite, including index construction, measurement, and plotting:
 
-| quantizers | pq fit s | pq encode s |   M |  M0 | ef_construction | ef_search | load s | memory MiB | recall@10 |    QPS | avg ms | p50 ms | p90 ms | p99 ms | max ms |
-| ---------: | -------: | ----------: | --: | --: | --------------: | --------: | -----: | ---------: | --------: | -----: | -----: | -----: | -----: | -----: | -----: |
-|        196 |  195.355 |       0.502 |  16 |  32 |             128 |        32 |  0.090 |      31.56 |    0.9296 | 7664.7 |  0.130 |  0.130 |  0.147 |  0.181 |  0.488 |
-|        196 |  195.355 |       0.502 |  16 |  32 |             128 |        64 |  0.091 |      31.56 |    0.9373 | 5802.2 |  0.172 |  0.173 |  0.200 |  0.244 |  0.576 |
-|        196 |  195.355 |       0.502 |  32 |  64 |             200 |        64 |  0.090 |      35.08 |    0.9374 | 5129.6 |  0.195 |  0.196 |  0.234 |  0.291 |  0.902 |
-|        196 |  195.355 |       0.502 |  32 |  64 |             200 |       128 |  0.089 |      35.08 |    0.9393 | 3579.2 |  0.279 |  0.281 |  0.349 |  0.444 |  1.307 |
-
-### Build performance
-
-These results measure index construction from the base dataset.
-
-Build-time memory is higher because `memory_usage_bytes()` counts `Vec::capacity()`, not `.len()`.
-
-During incremental construction, `Vec`s over-allocate and leave some spare capacity.
-After loading from disk, `bincode2` reconstructs with exact capacity, so the unused capacity is gone.
-
-| Dataset   |   M |  M0 | ef_construction | build s | inserts/s | build memory MiB |
-| --------- | --: | --: | --------------: | ------: | --------: | ---------------: |
-| SIFT-1M   |  16 |  32 |             128 | 206.481 |      4843 |          1042.83 |
-| SIFT-1M   |  32 |  64 |             200 | 382.948 |      2611 |          1224.88 |
-| SIFT-1M   |  32 |  64 |             200 | 397.282 |      2517 |          1224.88 |
-| MNIST-60k |  16 |  32 |             128 |  17.760 |      3378 |           222.27 |
-| MNIST-60k |  16 |  32 |             128 |  17.990 |      3335 |           222.27 |
-| MNIST-60k |  32 |  64 |             200 |  28.616 |      2097 |           227.42 |
-| MNIST-60k |  32 |  64 |             200 |  28.888 |      2077 |           227.42 |
-
-### Config file
-
-The benchmark is configured by `bench-config.toml`.
-
-The fields describe the dataset and how the benchmark should run:
-
-- `dataset_path`: HDF5 file to read
-- `dimension`: vector dimension, currently matched in `src/bin/bench.rs`
-- `top_k = 10`
-- `warmup_queries = 100`
-- `query_limit = 1000`
-- `query_cycles = 100`
-- `load_index_prefix = "data/index/sift-128-euclidean-1MLN"`
-- `output_json = "path/to/output_results.json"` (optional)
-
-There are optional dataset-name fields too.
-If they are not set, the runner tries common names like `train`/`base` for vectors, `test`/`query`/`queries` for queries, and `neighbors`/`knns`/`groundtruth` for the expected nearest neighbors.
-
-The `[[configs]]` entries are the HNSW parameter sets to run.
-Each one produces or loads a separate index using the same filename pattern:
-
-```toml
-[[configs]]
-m = 16
-m0 = 32
-ef_construction = 128
+```bash
+./benchmarks/run.sh all
 ```
 
-The top-level `ef_searches` field is a query-time sweep. Each value is measured against every graph configuration.
-
-If `load_index_prefix` is set, the benchmark loads matching index files from disk.
-If `save_index_prefix` is set instead, it builds the index from the base dataset and writes it to disk after construction.
-If `output_json` is set, the runner writes one pretty-printed JSON report after
-all configured runs complete successfully. Console output remains unchanged.
+The suite uses the configs in `benchmarks/configs/`, writes results to `benchmarks/results/`, and generates the figures in `benchmarks/plots/`.
 
 ## How it works
 
