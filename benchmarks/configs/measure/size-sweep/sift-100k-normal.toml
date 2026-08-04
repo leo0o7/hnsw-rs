@@ -1,0 +1,16 @@
+dataset_path = "data/sift-128-euclidean.hdf5"
+dimension = 128
+top_k = 10
+warmup_queries = 100
+query_limit = 1000
+query_cycles = 100
+base_limit = 100000
+load_index_prefix = "data/index/size-sweep/sift-128-euclidean-100k"
+output_json = "benchmarks/results/measure/size-sweep/sift-100k-normal.json"
+seed = 42
+ef_searches = [16, 32, 64, 128, 256, 512]
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 200

@@ -1,0 +1,25 @@
+dataset_path = "data/mnist-784-euclidean.hdf5"
+dimension = 784
+top_k = 10
+warmup_queries = 100
+query_limit = 1000
+query_cycles = 100
+load_index_prefix = "data/index/m-sweep/mnist-784-euclidean-60k"
+output_json = "benchmarks/results/measure/m-sweep/mnist-60k-normal.json"
+seed = 42
+ef_searches = [16, 32, 64, 128, 256, 512]
+
+[[configs]]
+m = 6
+m0 = 12
+ef_construction = 200
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 200
+
+[[configs]]
+m = 32
+m0 = 64
+ef_construction = 200

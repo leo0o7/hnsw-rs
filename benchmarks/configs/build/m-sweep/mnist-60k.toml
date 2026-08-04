@@ -1,0 +1,24 @@
+dataset_path = "data/mnist-784-euclidean.hdf5"
+dimension = 784
+top_k = 10
+warmup_queries = 100
+query_limit = 1000
+query_cycles = 10
+save_index_prefix = "data/index/m-sweep/mnist-784-euclidean-60k"
+seed = 42
+ef_searches = [32]
+
+[[configs]]
+m = 6
+m0 = 12
+ef_construction = 200
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 200
+
+[[configs]]
+m = 32
+m0 = 64
+ef_construction = 200
