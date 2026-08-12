@@ -105,75 +105,6 @@ where
         self.insert_with_context(vec, &mut ctx);
     }
 
-    pub fn insert_with_context(&mut self, vec: [f32; D], ctx: &mut InsertContext) {
-        let insert_idx = self.data.len();
-        let insert_lyr = self.random_layer();
-        self.data.push(vec);
-        self.nodes.push(Node {
-            layers: Vec::with_capacity(insert_lyr + 1),
-            epoch: Cell::new(0),
-        });
-        for lyr in 0..=insert_lyr {
-            let max_connections = self.max_connections(lyr);
-            self.nodes[insert_idx]
-                .layers
-                .push(Vec::with_capacity(max_connections));
-        }
-
-        if insert_idx == 0 {
-            self.entry_point = 0;
-            self.max_layer = insert_lyr;
-            return;
-        }
-
-        let insert_ctx = &mut ctx.search_ctx;
-        let mut ep = self.entry_point;
-        for lyr in ((insert_lyr + 1)..=self.max_layer).rev() {
-            ep = self
-                .search_layer_with_context(&vec, ep, lyr, 1, insert_ctx)
-                .first()
-                .unwrap_or_else(|| {
-                    panic!("ERROR: search_layer@{lyr} returned an empty array (insert)")
-                })
-                .node_index;
-        }
-
-        let select_ctx = &mut ctx.select_ctx;
-        for lyr in (0..=insert_lyr.min(self.max_layer)).rev() {
-            let candidates =
-                self.search_layer_with_context(&vec, ep, lyr, self.ef_construction, insert_ctx);
-            let neighs = self.select_neighbors(&vec, lyr, candidates, false, false, select_ctx);
-            self.nodes[insert_idx].layers[lyr] = neighs;
-
-            // can't use .iter() here because it would keep an immutable borrow of
-            // the list for the whole loop, which wouldn't allow the mutable
-            // borrow of `self` in `add_backlink`
-            let len = self.nodes[insert_idx].layers[lyr].len();
-            for i in 0..len {
-                // only borrow here, copying the value and ending the borrow before `add_backlink`
-                let fw_link = self.nodes[insert_idx].layers[lyr][i];
-                let backlink = Link {
-                    node_index: insert_idx,
-                    distance: fw_link.distance,
-                };
-                self.add_backlink(fw_link.node_index, backlink, lyr, select_ctx);
-            }
-
-            ep = self.nodes[insert_idx].layers[lyr]
-                .iter()
-                .min()
-                .unwrap_or_else(|| {
-                    panic!("ERROR: no neighbours found while inserting vec at layer={lyr}, an empty array was returned by select_neighbors (insert)")
-                })
-                .node_index;
-        }
-
-        if insert_lyr > self.max_layer {
-            self.max_layer = insert_lyr;
-            self.entry_point = insert_idx;
-        }
-    }
-
     fn search_layer_with_context<'a>(
         &self,
         q: &[f32; D],
@@ -385,6 +316,121 @@ fn avoid_epoch_overflow(epoch: &Cell<usize>, nodes: &[Node]) {
         epoch.set(0);
         for node in nodes {
             node.epoch.set(0);
+        }
+    }
+}
+
+// INSERT
+impl<const D: usize, DS> Hnsw<D, DS>
+where
+    DS: Distance<D>,
+{
+    pub fn insert_with_context(&mut self, vec: [f32; D], ctx: &mut InsertContext) {
+        let (insert_idx, insert_lyr) = self.init_node(vec);
+
+        if insert_idx == 0 {
+            self.entry_point = 0;
+            self.max_layer = insert_lyr;
+            return;
+        }
+
+        let search_ctx = &mut ctx.search_ctx;
+        let select_ctx = &mut ctx.select_ctx;
+        let mut ep = self.funnel_to_lyr_ep(vec, search_ctx, insert_lyr);
+        for lyr in (0..=insert_lyr.min(self.max_layer)).rev() {
+            ep = self.connect_lyr(vec, insert_idx, search_ctx, select_ctx, ep, lyr);
+        }
+
+        self.update_entry_point_if_required(insert_idx, insert_lyr);
+    }
+
+    fn connect_lyr(
+        &mut self,
+        vec: [f32; D],
+        insert_idx: usize,
+        search_ctx: &mut SearchContext,
+        select_ctx: &mut SelectContext,
+        ep: usize,
+        lyr: usize,
+    ) -> usize {
+        let candidates =
+            self.search_layer_with_context(&vec, ep, lyr, self.ef_construction, search_ctx);
+
+        let selected = self.select_neighbors(&vec, lyr, candidates, false, false, select_ctx);
+        let next_ep = selected
+            .first()
+            .expect("neighbor selection returned no nodes")
+            .node_index;
+        debug_assert!(
+            &selected[0]
+                == selected
+                    .iter()
+                    .min()
+                    .expect("neighbor selection returned no nodes"),
+            "next_ep doesn't have the distance list"
+        );
+
+        self.nodes[insert_idx].layers[lyr] = selected;
+        self.update_backlinks(insert_idx, select_ctx, lyr);
+
+        next_ep
+    }
+
+    fn funnel_to_lyr_ep(
+        &mut self,
+        vec: [f32; D],
+        search_ctx: &mut SearchContext,
+        insert_lyr: usize,
+    ) -> usize {
+        let mut ep = self.entry_point;
+        for lyr in ((insert_lyr + 1)..=self.max_layer).rev() {
+            ep = self
+                .search_layer_with_context(&vec, ep, lyr, 1, search_ctx)
+                .first()
+                .unwrap_or_else(|| {
+                    panic!("ERROR: search_layer@{lyr} returned an empty array (insert)")
+                })
+                .node_index;
+        }
+        ep
+    }
+
+    fn update_backlinks(&mut self, insert_idx: usize, select_ctx: &mut SelectContext, lyr: usize) {
+        // can't use .iter() here because it would keep an immutable borrow of
+        // the list for the whole loop, which wouldn't allow the mutable
+        // borrow of `self` in `add_backlink`
+        let len = self.nodes[insert_idx].layers[lyr].len();
+        for i in 0..len {
+            // only borrow here, copying the value and ending the borrow before `add_backlink`
+            let fw_link = self.nodes[insert_idx].layers[lyr][i];
+            let backlink = Link {
+                node_index: insert_idx,
+                distance: fw_link.distance,
+            };
+            self.add_backlink(fw_link.node_index, backlink, lyr, select_ctx);
+        }
+    }
+
+    fn init_node(&mut self, vec: [f32; D]) -> (usize, usize) {
+        let insert_idx = self.data.len();
+        let insert_lyr = self.random_layer();
+        self.data.push(vec);
+        self.nodes.push(Node {
+            layers: Vec::with_capacity(insert_lyr + 1),
+        });
+        for lyr in 0..=insert_lyr {
+            let max_connections = self.max_connections(lyr);
+            self.nodes[insert_idx]
+                .layers
+                .push(Vec::with_capacity(max_connections));
+        }
+        (insert_idx, insert_lyr)
+    }
+
+    fn update_entry_point_if_required(&mut self, insert_idx: usize, insert_lyr: usize) {
+        if insert_lyr > self.max_layer {
+            self.max_layer = insert_lyr;
+            self.entry_point = insert_idx;
         }
     }
 }
