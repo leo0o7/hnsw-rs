@@ -5,7 +5,7 @@ use crate::{
     Hnsw, HnswSearcher, L2Squared, context::SearchContext, link::Link, node::Node,
     nodes_heap_usage_bytes,
 };
-use std::{cell::Cell, cmp::Reverse, mem::size_of};
+use std::{cmp::Reverse, mem::size_of};
 
 #[allow(non_snake_case)]
 pub struct FrozenPQHnsw<const D: usize, const Q: usize> {
@@ -13,7 +13,6 @@ pub struct FrozenPQHnsw<const D: usize, const Q: usize> {
     data: Vec<[u8; Q]>,
     nodes: Vec<Node>,
     max_layer: usize,
-    epoch: Cell<usize>,
     pq: ProductQuantizer<Q, D>,
 }
 
@@ -33,7 +32,6 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
             data: quantized_data,
             nodes: hnsw.nodes,
             max_layer: hnsw.max_layer,
-            epoch: hnsw.epoch,
             pq,
         }
     }
@@ -59,9 +57,10 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
         ctx: &'a mut SearchContext,
     ) -> &'a [Link] {
         ctx.clear();
+        let epoch = &mut ctx.visited;
+        epoch.advance_epoch();
         let frontier = &mut ctx.frontier;
         let best = &mut ctx.best;
-        self.epoch.set(self.epoch.get() + 1);
 
         let ep_link = Link {
             node_index: ep,
@@ -69,7 +68,7 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
         };
         frontier.push(Reverse(ep_link));
         best.push(ep_link);
-        self.nodes[ep].epoch.set(self.epoch.get());
+        epoch.mark_visited(ep);
 
         while let Some(Reverse(candidate)) = frontier.pop() {
             let furthest_dist = best.peek().map_or(f32::INFINITY, |l| l.distance);
@@ -77,10 +76,10 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
                 break;
             }
             for neigh in self.nodes[candidate.node_index].layers[lyr].iter() {
-                if self.nodes[neigh.node_index].epoch == self.epoch {
+                if epoch.is_visited(neigh.node_index) {
                     continue;
                 }
-                self.nodes[neigh.node_index].epoch.set(self.epoch.get());
+                epoch.mark_visited(neigh.node_index);
                 let dist = self
                     .pq
                     .adc_distance(adc_table, &self.data[neigh.node_index]);
@@ -99,7 +98,6 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
             }
         }
 
-        crate::avoid_epoch_overflow(&self.epoch, &self.nodes);
         ctx.consume_best()
     }
 
@@ -168,5 +166,9 @@ impl<const D: usize, const Q: usize> HnswSearcher<D> for FrozenPQHnsw<D, Q> {
             + self.data.capacity() * size_of::<[u8; Q]>()
             + nodes_heap_usage_bytes(&self.nodes)
             + self.pq.heap_usage_bytes()
+    }
+
+    fn len(&self) -> usize {
+        self.data.len()
     }
 }

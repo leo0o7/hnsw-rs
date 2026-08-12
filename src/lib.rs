@@ -5,7 +5,7 @@ use crate::{
     link::Link,
     node::{Node, nodes_heap_usage_bytes},
 };
-use std::{cell::Cell, cmp::Reverse, mem::size_of};
+use std::{cmp::Reverse, mem::size_of};
 
 mod context;
 mod disk;
@@ -27,7 +27,6 @@ pub struct Hnsw<const D: usize, DS = L2Squared> {
     pub(crate) data: Vec<[f32; D]>,
     pub(crate) nodes: Vec<Node>,
     pub(crate) max_layer: usize,
-    epoch: Cell<usize>,
     ml: f64,
     seed: u64,
     rng: StdRng,
@@ -36,7 +35,7 @@ pub struct Hnsw<const D: usize, DS = L2Squared> {
 
 pub trait HnswSearcher<const D: usize> {
     fn search_context(&self) -> SearchContext {
-        SearchContext::default()
+        SearchContext::default(self.len())
     }
 
     fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
@@ -45,7 +44,7 @@ pub trait HnswSearcher<const D: usize> {
 
     fn search_with_ef(&self, q: &[f32; D], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
         assert!(ef_search > 0, "ef_search must be > 0");
-        let mut ctx = SearchContext::with_capacity(ef_search);
+        let mut ctx = SearchContext::with_capacity(self.len(), ef_search);
         self.search_with_context(q, k, ef_search, &mut ctx)
     }
 
@@ -58,8 +57,11 @@ pub trait HnswSearcher<const D: usize> {
     ) -> Vec<(usize, f32)>;
 
     fn memory_usage_bytes(&self) -> usize;
+
+    fn len(&self) -> usize;
 }
 
+// SEARCH
 impl<const D: usize, DS> Hnsw<D, DS>
 where
     DS: Distance<D>,
@@ -79,7 +81,6 @@ where
             data: Vec::new(),
             nodes: Vec::new(),
             max_layer: 0,
-            epoch: Cell::new(0),
             ml,
             seed,
             rng: StdRng::seed_from_u64(seed),
@@ -95,8 +96,8 @@ where
 
     pub fn insert_context(&self) -> InsertContext {
         InsertContext {
-            select_ctx: SelectContext::init(self.M0),
-            search_ctx: SearchContext::with_capacity(self.ef_construction),
+            select_ctx: SelectContext::init(self.M0, self.len()),
+            search_ctx: SearchContext::with_capacity(self.len(), self.ef_construction),
         }
     }
 
@@ -121,9 +122,10 @@ where
             "entry point does not exist in this layer"
         );
         ctx.clear();
+        let epoch = &mut ctx.visited;
+        epoch.advance_epoch();
         let frontier = &mut ctx.frontier;
         let best = &mut ctx.best;
-        self.epoch.set(self.epoch.get() + 1);
 
         let ep_link = Link {
             node_index: ep,
@@ -131,7 +133,7 @@ where
         };
         frontier.push(Reverse(ep_link));
         best.push(ep_link);
-        self.nodes[ep].epoch.set(self.epoch.get());
+        epoch.mark_visited(ep);
 
         while let Some(Reverse(candidate)) = frontier.pop() {
             let furthest_dist = best.peek().map_or(f32::INFINITY, |l| l.distance);
@@ -139,10 +141,10 @@ where
                 break;
             }
             for neigh in self.nodes[candidate.node_index].layers[lyr].iter() {
-                if self.nodes[neigh.node_index].epoch == self.epoch {
+                if epoch.is_visited(neigh.node_index) {
                     continue;
                 }
-                self.nodes[neigh.node_index].epoch.set(self.epoch.get());
+                epoch.mark_visited(neigh.node_index);
                 let dist = self.distance(q, &self.data[neigh.node_index]);
                 if best.len() == ef && best.peek().is_some_and(|furthest| furthest.distance > dist)
                 {
@@ -159,7 +161,6 @@ where
             }
         }
 
-        avoid_epoch_overflow(&self.epoch, &self.nodes);
         ctx.consume_best()
     }
 
@@ -175,35 +176,33 @@ where
         assert!(lyr <= self.max_layer, "layer not initialized",);
 
         ctx.clear();
-        self.epoch.set(self.epoch.get() + 1);
+        let epoch = &mut ctx.visited;
+        epoch.advance_epoch();
         let pq = &mut ctx.pq;
         let discarded = &mut ctx.discarded;
         let best = &mut ctx.best;
         let max_connections = self.max_connections(lyr);
 
-        for (node, link) in candidates
+        for (node, link, idx) in candidates
             .iter()
-            .map(|link| (&self.nodes[link.node_index], link))
+            .map(|link| (&self.nodes[link.node_index], link, link.node_index))
         {
-            if node.epoch == self.epoch {
+            if epoch.is_visited(idx) {
                 continue;
             }
-            node.epoch.set(self.epoch.get());
+            epoch.mark_visited(idx);
             pq.push(Reverse(*link));
 
             if extend {
                 let neighs = &node.layers[lyr];
-                for (neigh, vec, idx) in neighs.iter().map(|link| {
-                    (
-                        &self.nodes[link.node_index],
-                        &self.data[link.node_index],
-                        link.node_index,
-                    )
-                }) {
-                    if neigh.epoch == self.epoch {
+                for (vec, idx) in neighs
+                    .iter()
+                    .map(|link| (&self.data[link.node_index], link.node_index))
+                {
+                    if epoch.is_visited(idx) {
                         continue;
                     }
-                    neigh.epoch.set(self.epoch.get());
+                    epoch.mark_visited(idx);
                     pq.push(Reverse(Link {
                         node_index: idx,
                         distance: self.distance(qv, vec),
@@ -212,7 +211,6 @@ where
             }
         }
 
-        avoid_epoch_overflow(&self.epoch, &self.nodes);
         // no pruning required
         if pq.len() <= max_connections {
             return ctx.consume_pq();
@@ -301,22 +299,8 @@ where
         (-x.ln() * self.ml).floor() as usize
     }
 
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
-    }
-}
-
-#[inline(always)]
-fn avoid_epoch_overflow(epoch: &Cell<usize>, nodes: &[Node]) {
-    if epoch.get() == usize::MAX {
-        epoch.set(0);
-        for node in nodes {
-            node.epoch.set(0);
-        }
     }
 }
 
@@ -484,5 +468,9 @@ where
         size_of::<Self>()
             + self.data.capacity() * size_of::<[f32; D]>()
             + nodes_heap_usage_bytes(&self.nodes)
+    }
+
+    fn len(&self) -> usize {
+        self.data.len()
     }
 }

@@ -1,4 +1,4 @@
-use std::{cell::Cell, error::Error, fs::File, io::BufWriter, path::Path};
+use std::{error::Error, fs::File, io::BufWriter, path::Path};
 
 use rand::{
     SeedableRng,
@@ -6,7 +6,7 @@ use rand::{
     rngs::StdRng,
 };
 use serde::{
-    Deserialize, Deserializer, Serialize, Serializer,
+    Deserialize, Serialize,
     ser::{SerializeSeq, SerializeStruct},
 };
 
@@ -127,29 +127,10 @@ where
             data,
             nodes: disk.nodes,
             max_layer: disk.max_layer,
-            epoch: Cell::new(0),
             ml: disk.ml,
             seed: disk.seed,
             rng,
             dist: disk.dist,
         })
     }
-}
-
-pub(crate) fn serialize_epoch_as_zero<S>(
-    _epoch: &Cell<usize>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_u64(0u64)
-}
-
-pub(crate) fn deserialize_epoch_as_zero<'de, D>(deserializer: D) -> Result<Cell<usize>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let _ = usize::deserialize(deserializer)?;
-    Ok(Cell::new(0))
 }
