@@ -5,7 +5,7 @@ use crate::{
     link::Link,
     node::{Node, nodes_heap_usage_bytes},
 };
-use std::{cmp::Reverse, mem::size_of};
+use std::{cmp::Reverse, mem::size_of, sync::RwLock};
 
 mod context;
 mod disk;
@@ -120,19 +120,22 @@ where
             self.max_layer = insert_lyr;
             return;
         }
-
-        let search_ctx = &mut ctx.search_ctx;
-        let select_ctx = &mut ctx.select_ctx;
-        let mut ep = self.funnel_to_lyr_ep(vec, search_ctx, insert_lyr);
-        for lyr in (0..=insert_lyr.min(self.max_layer)).rev() {
-            ep = self.connect_lyr(vec, insert_idx, search_ctx, select_ctx, ep, lyr);
-        }
-
+        self.insert_preallocated(insert_idx, insert_lyr, ctx);
         self.update_entry_point_if_required(insert_idx, insert_lyr);
     }
 
+    fn insert_preallocated(&self, idx: usize, max_lyr: usize, ctx: &mut InsertContext) {
+        let vec = self.data[idx];
+        let search_ctx = &mut ctx.search_ctx;
+        let select_ctx = &mut ctx.select_ctx;
+        let mut ep = self.funnel_to_lyr_ep(vec, search_ctx, max_lyr);
+        for lyr in (0..=max_lyr.min(self.max_layer)).rev() {
+            ep = self.connect_lyr(vec, idx, search_ctx, select_ctx, ep, lyr);
+        }
+    }
+
     fn connect_lyr(
-        &mut self,
+        &self,
         vec: [f32; D],
         insert_idx: usize,
         search_ctx: &mut SearchContext,
@@ -157,14 +160,14 @@ where
             "next_ep doesn't have the distance list"
         );
 
-        self.nodes[insert_idx].layers[lyr] = selected;
+        *self.nodes[insert_idx].layers[lyr].write().unwrap() = selected;
         self.publish_node(insert_idx, select_ctx, lyr);
 
         next_ep
     }
 
     fn funnel_to_lyr_ep(
-        &mut self,
+        &self,
         vec: [f32; D],
         search_ctx: &mut SearchContext,
         insert_lyr: usize,
@@ -182,14 +185,14 @@ where
         ep
     }
 
-    fn publish_node(&mut self, insert_idx: usize, select_ctx: &mut SelectContext, lyr: usize) {
+    fn publish_node(&self, insert_idx: usize, select_ctx: &mut SelectContext, lyr: usize) {
         // can't use .iter() here because it would keep an immutable borrow of
         // the list for the whole loop, which wouldn't allow the mutable
         // borrow of `self` in `add_backlink`
-        let len = self.nodes[insert_idx].layers[lyr].len();
+        let len = self.nodes[insert_idx].layers[lyr].read().unwrap().len();
         for i in 0..len {
             // only borrow here, copying the value and ending the borrow before `add_backlink`
-            let fw_link = self.nodes[insert_idx].layers[lyr][i];
+            let fw_link = self.nodes[insert_idx].layers[lyr].read().unwrap()[i];
             let backlink = Link {
                 node_index: insert_idx,
                 distance: fw_link.distance,
@@ -209,7 +212,7 @@ where
             let max_connections = self.max_connections(lyr);
             self.nodes[insert_idx]
                 .layers
-                .push(Vec::with_capacity(max_connections));
+                .push(RwLock::new(Vec::with_capacity(max_connections)));
         }
         (insert_idx, insert_lyr)
     }
@@ -275,7 +278,11 @@ where
             if candidate.distance > furthest_dist {
                 break;
             }
-            for neigh in self.nodes[candidate.node_index].layers[lyr].iter() {
+            for neigh in self.nodes[candidate.node_index].layers[lyr]
+                .read()
+                .unwrap()
+                .iter()
+            {
                 if epoch.is_visited(neigh.node_index) {
                     continue;
                 }
@@ -382,6 +389,8 @@ where
             if extend {
                 let neighs = &node.layers[lyr];
                 for (vec, idx) in neighs
+                    .read()
+                    .unwrap()
                     .iter()
                     .map(|link| (&self.data[link.node_index], link.node_index))
                 {
@@ -441,7 +450,7 @@ where
         ctx.consume_best()
     }
 
-    fn add_backlink(&mut self, at: usize, link: Link, lyr: usize, ctx: &mut SelectContext) {
+    fn add_backlink(&self, at: usize, link: Link, lyr: usize, ctx: &mut SelectContext) {
         assert!(lyr <= self.max_layer, "layer not initialized",);
         assert!(at < self.data.len(), "backlink base index out of bounds",);
         assert!(
@@ -455,14 +464,14 @@ where
         assert!(link.node_index != at, "can't link node to itself");
 
         let max_connections = self.max_connections(lyr);
-        let links = &mut self.nodes[at].layers[lyr];
+        let mut links = self.nodes[at].layers[lyr].write().unwrap();
 
         links.push(link);
         if links.len() > max_connections {
-            let candidates = std::mem::take(links);
+            let candidates = std::mem::take(&mut *links);
             let new_links =
                 self.select_neighbors(&self.data[at], lyr, &candidates, false, false, ctx);
-            self.nodes[at].layers[lyr] = new_links;
+            *links = new_links;
         }
     }
 

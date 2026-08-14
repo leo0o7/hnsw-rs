@@ -220,7 +220,12 @@ fn test_max_connections() {
     }
 
     for node in &h.nodes {
-        for (lyr, neighs) in node.layers.iter().enumerate() {
+        for (lyr, neighs) in node
+            .layers
+            .iter()
+            .map(|lyr| lyr.read().unwrap())
+            .enumerate()
+        {
             let max = if lyr == 0 { h.M0 } else { h.M };
             assert!(
                 neighs.len() <= max,
@@ -244,7 +249,7 @@ fn test_no_duplicate_neighbors() {
     for node in &h.nodes {
         for neighs in &node.layers {
             let mut seen = std::collections::HashSet::new();
-            for n in neighs {
+            for n in neighs.read().unwrap().iter() {
                 assert!(seen.insert(n.node_index), "duplicate neighbor detected");
             }
         }

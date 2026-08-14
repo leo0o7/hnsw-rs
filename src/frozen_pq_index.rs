@@ -75,7 +75,11 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
             if candidate.distance > furthest_dist {
                 break;
             }
-            for neigh in self.nodes[candidate.node_index].layers[lyr].iter() {
+            for neigh in self.nodes[candidate.node_index].layers[lyr]
+                .read()
+                .unwrap()
+                .iter()
+            {
                 if epoch.is_visited(neigh.node_index) {
                     continue;
                 }
