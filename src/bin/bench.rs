@@ -32,6 +32,7 @@ pub(crate) struct BenchFile {
     pub(crate) output_json: Option<String>,
     pub(crate) quantized: Option<QuantizedConfig>,
     pub(crate) configs: Vec<BenchConfig>,
+    pub(crate) build_parallel: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]

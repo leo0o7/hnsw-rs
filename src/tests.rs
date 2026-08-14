@@ -59,6 +59,16 @@ fn temp_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(unique)
 }
 
+fn measure_recall<const D: usize>(index: Hnsw<D>, k: usize, queries: &[[f32; D]]) -> f32 {
+    let mut total_recall = 0.0;
+    for query in queries {
+        let graph_results = index.search(query, k);
+        let brute_results = brute_force_knn(&index.data, query, k);
+        total_recall += calculate_recall(graph_results, brute_results);
+    }
+    total_recall / queries.len() as f32
+}
+
 #[test]
 fn test_knn() {
     let mut knn = Hnsw::<2>::new_default(5);
@@ -276,20 +286,54 @@ fn test_avg_recall() {
         knn.insert(v);
     }
 
-    let mut total_recall = 0.0;
-    for _ in 0..N_RECALL_QUERIES {
-        let query: [f32; DIMS] = (0..DIMS)
+    let queries: Vec<[f32; DIMS]> = (0..N_RECALL_QUERIES)
+        .map(|_| {
+            (0..DIMS)
+                .map(|_| rng.random_range(-10.0..10.0))
+                .collect::<Vec<f32>>()
+                .try_into()
+                .unwrap()
+        })
+        .collect();
+
+    let avg_recall = measure_recall(knn, K, &queries);
+    println!("avg recall: {:.1}%", avg_recall * 100.0);
+    assert!(avg_recall >= MIN_RECALL);
+}
+
+#[test]
+fn test_parallel_build_recall() {
+    const N: usize = 10_000;
+    const DIMS: usize = 8;
+    const K: usize = 5;
+    const M: usize = 16;
+    const N_RECALL_QUERIES: usize = 1000;
+
+    let mut rng = rand::rng();
+    let mut knn = Hnsw::<DIMS>::new_default(M);
+
+    let mut vecs = Vec::new();
+    for _ in 0..N {
+        let v: [f32; DIMS] = (0..DIMS)
             .map(|_| rng.random_range(-10.0..10.0))
             .collect::<Vec<f32>>()
             .try_into()
             .unwrap();
-        let graph_results = knn.search(&query, K);
-        let brute_results = brute_force_knn(&knn.data, &query, K);
-        total_recall += calculate_recall(graph_results, brute_results);
+        vecs.push(v)
     }
-    let avg_recall = total_recall / N_RECALL_QUERIES as f32;
+    knn.build_parallel(&vecs);
 
+    let queries: Vec<[f32; DIMS]> = (0..N_RECALL_QUERIES)
+        .map(|_| {
+            (0..DIMS)
+                .map(|_| rng.random_range(-10.0..10.0))
+                .collect::<Vec<f32>>()
+                .try_into()
+                .unwrap()
+        })
+        .collect();
+
+    let avg_recall = measure_recall(knn, K, &queries);
     println!("avg recall: {:.1}%", avg_recall * 100.0);
-
     assert!(avg_recall >= MIN_RECALL);
 }

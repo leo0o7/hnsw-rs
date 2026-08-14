@@ -19,6 +19,7 @@ mod tests;
 pub use dist::{Distance, L2Squared};
 
 #[allow(non_snake_case)]
+#[derive(Debug)]
 pub struct Hnsw<const D: usize, DS = L2Squared> {
     M: usize,
     M0: usize,
@@ -98,7 +99,7 @@ where
 // INSERT
 impl<const D: usize, DS> Hnsw<D, DS>
 where
-    DS: Distance<D>,
+    DS: Distance<D> + Send + Sync,
 {
     pub fn insert_context(&self) -> InsertContext {
         InsertContext {
@@ -112,16 +113,32 @@ where
         self.insert_with_context(vec, &mut ctx);
     }
 
-    pub fn insert_with_context(&mut self, vec: [f32; D], ctx: &mut InsertContext) {
-        let (insert_idx, insert_lyr) = self.init_node(vec);
+    // assumes the graph is empty
+    pub fn build_parallel(&mut self, vecs: &[[f32; D]]) {
+        assert!(
+            self.is_empty(),
+            "parallel construction is only supported on an empty graph"
+        );
+        let mut nodes = self.preallocate_nodes(vecs);
+        // entry point is automatically inserted
+        nodes.swap_remove(self.entry_point);
 
-        if insert_idx == 0 {
-            self.entry_point = 0;
-            self.max_layer = insert_lyr;
-            return;
-        }
-        self.insert_preallocated(insert_idx, insert_lyr, ctx);
-        self.update_entry_point_if_required(insert_idx, insert_lyr);
+        let nthreads = std::thread::available_parallelism()
+            .expect("unable to get number available of threads")
+            .get();
+        let chunk_sz = nodes.len().div_ceil(nthreads);
+
+        let index = &*self;
+        std::thread::scope(|s| {
+            for chunk in nodes.chunks(chunk_sz) {
+                s.spawn(move || {
+                    let mut thread_ctx = index.insert_context();
+                    for (idx, lyr) in chunk {
+                        index.insert_preallocated(*idx, *lyr, &mut thread_ctx);
+                    }
+                });
+            }
+        });
     }
 
     fn insert_preallocated(&self, idx: usize, max_lyr: usize, ctx: &mut InsertContext) {
@@ -132,6 +149,18 @@ where
         for lyr in (0..=max_lyr.min(self.max_layer)).rev() {
             ep = self.connect_lyr(vec, idx, search_ctx, select_ctx, ep, lyr);
         }
+    }
+
+    pub fn insert_with_context(&mut self, vec: [f32; D], ctx: &mut InsertContext) {
+        let (insert_idx, insert_lyr) = self.init_node(vec);
+
+        if insert_idx == 0 {
+            self.entry_point = 0;
+            self.max_layer = insert_lyr;
+            return;
+        }
+        self.insert_preallocated(insert_idx, insert_lyr, ctx);
+        self.update_entry_point_if_required(insert_idx, insert_lyr);
     }
 
     fn connect_lyr(
@@ -189,10 +218,11 @@ where
         // can't use .iter() here because it would keep an immutable borrow of
         // the list for the whole loop, which wouldn't allow the mutable
         // borrow of `self` in `add_backlink`
-        let len = self.nodes[insert_idx].layers[lyr].read().unwrap().len();
+        let links = self.nodes[insert_idx].layers[lyr].read().unwrap();
+        let len = links.len();
         for i in 0..len {
             // only borrow here, copying the value and ending the borrow before `add_backlink`
-            let fw_link = self.nodes[insert_idx].layers[lyr].read().unwrap()[i];
+            let fw_link = links[i];
             let backlink = Link {
                 node_index: insert_idx,
                 distance: fw_link.distance,
@@ -217,13 +247,15 @@ where
         (insert_idx, insert_lyr)
     }
 
-    // assumes the graph is empty at creation
-    fn preallocate_nodes(&mut self, vecs: Vec<[f32; D]>) -> Vec<(usize, usize)> {
-        assert!(self.is_empty(), "can only preallocate when graph is empty");
+    fn preallocate_nodes(&mut self, vecs: &[[f32; D]]) -> Vec<(usize, usize)> {
+        assert!(
+            self.is_empty(),
+            "node preallocation is only suppored on an empty graph"
+        );
 
         let mut nodes = Vec::with_capacity(vecs.len());
         for vec in vecs {
-            let (insert_idx, insert_lyr) = self.init_node(vec);
+            let (insert_idx, insert_lyr) = self.init_node(*vec);
             nodes.push((insert_idx, insert_lyr));
             self.update_entry_point_if_required(insert_idx, insert_lyr);
         }

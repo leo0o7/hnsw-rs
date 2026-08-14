@@ -163,9 +163,13 @@ fn prepare_index<const DIM: usize>(
             );
 
             let build_start = Instant::now();
-            let mut insert_ctx = index.insert_context();
-            for &vector in base {
-                index.insert_with_context(vector, &mut insert_ctx);
+            if config.build_parallel {
+                index.build_parallel(base);
+            } else {
+                let mut insert_ctx = index.insert_context();
+                for &vector in base {
+                    index.insert_with_context(vector, &mut insert_ctx);
+                }
             }
             let build_time = build_start.elapsed();
             let insert_qps = base.len() as f64 / build_time.as_secs_f64();
