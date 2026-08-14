@@ -158,7 +158,7 @@ where
         );
 
         self.nodes[insert_idx].layers[lyr] = selected;
-        self.update_backlinks(insert_idx, select_ctx, lyr);
+        self.publish_node(insert_idx, select_ctx, lyr);
 
         next_ep
     }
@@ -182,7 +182,7 @@ where
         ep
     }
 
-    fn update_backlinks(&mut self, insert_idx: usize, select_ctx: &mut SelectContext, lyr: usize) {
+    fn publish_node(&mut self, insert_idx: usize, select_ctx: &mut SelectContext, lyr: usize) {
         // can't use .iter() here because it would keep an immutable borrow of
         // the list for the whole loop, which wouldn't allow the mutable
         // borrow of `self` in `add_backlink`
@@ -212,6 +212,20 @@ where
                 .push(Vec::with_capacity(max_connections));
         }
         (insert_idx, insert_lyr)
+    }
+
+    // assumes the graph is empty at creation
+    fn preallocate_nodes(&mut self, vecs: Vec<[f32; D]>) -> Vec<(usize, usize)> {
+        assert!(self.is_empty(), "can only preallocate when graph is empty");
+
+        let mut nodes = Vec::with_capacity(vecs.len());
+        for vec in vecs {
+            let (insert_idx, insert_lyr) = self.init_node(vec);
+            nodes.push((insert_idx, insert_lyr));
+            self.update_entry_point_if_required(insert_idx, insert_lyr);
+        }
+
+        nodes
     }
 
     fn update_entry_point_if_required(&mut self, insert_idx: usize, insert_lyr: usize) {
