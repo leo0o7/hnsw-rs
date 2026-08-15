@@ -35,6 +35,7 @@ pub struct Hnsw<const D: usize, DS = L2Squared> {
     dist: DS,
 }
 
+#[derive(Debug)]
 pub struct Storage<const D: usize> {
     pub(crate) data: Vec<[f32; D]>,
     pub(crate) nodes: Vec<Node>,
@@ -120,135 +121,101 @@ where
         self.insert_with_context(vec, &mut ctx)
     }
 
-    // assumes the graph is empty
-    pub fn build_parallel(&mut self, vecs: &[[f32; D]]) -> Vec<usize> {
-        // assert!(
-        //     self.is_empty(),
-        //     "parallel construction is only supported on an empty graph"
-        // );
-        // let mut nodes = self.preallocate_nodes(vecs);
-        // // entry point is automatically inserted
-        // nodes.swap_remove(*self.entry_point.read().unwrap());
-        //
-        // let nthreads = std::thread::available_parallelism()
-        //     .expect("unable to get number available of threads")
-        //     .get();
-        // let chunk_sz = nodes.len().div_ceil(nthreads);
-        //
-        // let index = &*self;
-        // std::thread::scope(|s| {
-        //     for chunk in nodes.chunks(chunk_sz) {
-        //         s.spawn(move || {
-        //             let mut thread_ctx = index.insert_context();
-        //             for (idx, lyr) in chunk {
-        //                 index.insert_preallocated(*idx, *lyr, &mut thread_ctx);
-        //             }
-        //         });
-        //     }
-        // });
-        let internal_id = Mutex::new(vec![0; vecs.len()]);
-        internal_id.lock().unwrap()[vecs.len() - 1] = self.insert(vecs[vecs.len() - 1]);
-        let vecs = &vecs[0..vecs.len() - 1];
+    pub fn build_parallel(&mut self, vecs: &[[f32; D]]) {
+        assert!(
+            self.is_empty(),
+            "parallel construction is only supported on an empty graph"
+        );
+        let mut nodes = self.preallocate_nodes(vecs);
+        // entry is already inserted
+        {
+            let entry = self.entry.read().unwrap();
+            nodes.swap_remove(entry.0);
+        }
+
+        let nthreads = std::thread::available_parallelism()
+            .expect("unable to get number available of threads")
+            .get();
+        let chunk_sz = nodes.len().div_ceil(nthreads);
+
+        let index = &*self;
+        std::thread::scope(|s| {
+            for chunk in nodes.chunks(chunk_sz) {
+                s.spawn(move || {
+                    let mut thread_ctx = index.insert_context();
+                    for (idx, lyr) in chunk {
+                        index.insert_preallocated(*idx, *lyr, &mut thread_ctx);
+                    }
+                });
+            }
+        });
+    }
+
+    pub fn extend_parallel(&self, vecs: &[[f32; D]]) -> Vec<usize> {
+        let mut internal_id = vec![0; vecs.len()];
+        internal_id[0] = self.insert(vecs[0]);
+        let vecs = &vecs[1..];
 
         let nthreads = std::thread::available_parallelism()
             .expect("unable to get number available of threads")
             .get();
         let chunk_sz = vecs.len().div_ceil(nthreads);
-        let index = &*self;
         std::thread::scope(|s| {
-            for (i, chunk) in vecs.chunks(chunk_sz).enumerate() {
-                let internal_id = &internal_id;
+            for (chunk, interal_ids) in vecs.chunks(chunk_sz).zip(internal_id.chunks_mut(chunk_sz))
+            {
                 s.spawn(move || {
-                    let mut thread_ctx = index.insert_context();
-                    for (j, vec) in chunk.iter().enumerate() {
-                        let id = index.insert_with_context(*vec, &mut thread_ctx);
-                        internal_id.lock().unwrap()[i * chunk_sz + j] = id;
+                    let mut thread_ctx = self.insert_context();
+                    for (vec, out_id) in chunk.iter().zip(interal_ids) {
+                        let id = self.insert_with_context(*vec, &mut thread_ctx);
+                        *out_id = id;
                     }
                 });
             }
         });
-        internal_id.into_inner().unwrap()
-    }
 
-    // fn insert_preallocated(&self, idx: usize, max_lyr: usize, ctx: &mut InsertContext) {
-    //     let vec = self.storage.read().unwrap().data[idx];
-    //     let search_ctx = &mut ctx.search_ctx;
-    //     let select_ctx = &mut ctx.select_ctx;
-    //     let mut ep = self.funnel_to_lyr_ep(vec, search_ctx, max_lyr);
-    //     for lyr in (0..=max_lyr.min(*self.max_layer.read().unwrap())).rev() {
-    //         ep = self.connect_lyr(vec, idx, search_ctx, select_ctx, ep, lyr);
-    //     }
-    // }
+        internal_id
+    }
 
     pub fn insert_with_context(&self, vec: [f32; D], ctx: &mut InsertContext) -> usize {
-        let search_ctx = &mut ctx.search_ctx;
-        let select_ctx = &mut ctx.select_ctx;
+        let (node, max_lyr) = self.new_node();
 
-        let (node, lyr) = self.tmp_node();
+        self.prepare_node(vec, &node, max_lyr, ctx);
+        let idx = self.commit(vec, node);
+        self.publish(idx, max_lyr, &mut ctx.select_ctx);
 
-        if self.is_empty() {
-            return self.commit(vec, node, select_ctx, lyr);
-        }
-
-        {
-            let storage = self.storage.read().unwrap();
-            let mut ep = self.funnel_to_lyr_ep(&storage, vec, search_ctx, lyr);
-            let max_layer = self.entry.read().unwrap().1;
-            for lyr in (0..=lyr.min(max_layer)).rev() {
-                ep = self.connect_lyr(&storage, vec, &node, search_ctx, select_ctx, ep, lyr);
-            }
-        }
-
-        self.commit(vec, node, select_ctx, lyr)
+        idx
     }
 
-    fn connect_lyr(
+    fn insert_preallocated(&self, idx: usize, max_lyr: usize, ctx: &mut InsertContext) -> usize {
+        let storage = self.storage.read().unwrap();
+        let node = &storage.nodes[idx];
+        let vec = storage.data[idx];
+
+        self.prepare_node_with_storage(&storage, vec, node, max_lyr, ctx);
+        self.publish(idx, max_lyr, &mut ctx.select_ctx);
+        idx
+    }
+
+    fn prepare_node(&self, vec: [f32; D], node: &Node, max_lyr: usize, ctx: &mut InsertContext) {
+        let storage = self.storage.read().unwrap();
+        if storage.data.is_empty() {
+            return;
+        }
+        self.prepare_node_with_storage(&storage, vec, node, max_lyr, ctx);
+    }
+    // assumes non empty storage
+    fn prepare_node_with_storage(
         &self,
         storage: &RwLockReadGuard<'_, Storage<D>>,
         vec: [f32; D],
         node: &Node,
-        search_ctx: &mut SearchContext,
-        select_ctx: &mut SelectContext,
-        ep: usize,
-        lyr: usize,
-    ) -> usize {
-        let candidates = self.search_layer_with_context(
-            storage,
-            &vec,
-            ep,
-            lyr,
-            self.ef_construction,
-            search_ctx,
-        );
-        let selected =
-            self.select_neighbors(storage, &vec, lyr, candidates, false, false, select_ctx);
-
-        let next_ep = selected
-            .first()
-            .expect("neighbor selection returned no nodes")
-            .node_index;
-        debug_assert!(
-            &selected[0]
-                == selected
-                    .iter()
-                    .min()
-                    .expect("neighbor selection returned no nodes"),
-            "next_ep doesn't have the distance list"
-        );
-
-        *node.layers[lyr].write().unwrap() = selected;
-        next_ep
-    }
-
-    fn funnel_to_lyr_ep(
-        &self,
-        storage: &RwLockReadGuard<'_, Storage<D>>,
-        vec: [f32; D],
-        search_ctx: &mut SearchContext,
-        insert_lyr: usize,
-    ) -> usize {
+        max_lyr: usize,
+        ctx: &mut InsertContext,
+    ) {
+        let search_ctx = &mut ctx.search_ctx;
+        let select_ctx = &mut ctx.select_ctx;
         let (mut ep, max_layer) = *self.entry.read().unwrap();
-        for lyr in ((insert_lyr + 1)..=max_layer).rev() {
+        for lyr in ((max_lyr + 1)..=max_layer).rev() {
             ep = self
                 .search_layer_with_context(storage, &vec, ep, lyr, 1, search_ctx)
                 .first()
@@ -257,82 +224,84 @@ where
                 })
                 .node_index;
         }
-        ep
+
+        for lyr in (0..=max_lyr.min(max_layer)).rev() {
+            let candidates = self.search_layer_with_context(
+                storage,
+                &vec,
+                ep,
+                lyr,
+                self.ef_construction,
+                search_ctx,
+            );
+            let selected =
+                self.select_neighbors(storage, &vec, lyr, candidates, false, false, select_ctx);
+
+            let next_ep = selected
+                .first()
+                .expect("neighbor selection returned no nodes")
+                .node_index;
+            *node.layers[lyr].write().unwrap() = selected;
+            ep = next_ep
+        }
     }
 
-    fn commit(
-        &self,
-        vec: [f32; D],
-        node: Node,
-        select_ctx: &mut SelectContext,
-        lyrs: usize,
-    ) -> usize {
-        let insert_idx = {
-            let mut storage = self.storage.write().unwrap();
-            let insert_idx = storage.data.len();
+    fn commit(&self, vec: [f32; D], node: Node) -> usize {
+        let mut storage = self.storage.write().unwrap();
+        let insert_idx = storage.data.len();
 
-            storage.data.push(vec);
-            storage.nodes.push(node);
-            insert_idx
-        };
-
-        let storage = self.storage.read().unwrap();
-        for lyr in 0..=lyrs {
-            self.publish_node(&storage, insert_idx, select_ctx, lyr);
-        }
-
-        self.update_entry_point_if_required(insert_idx, lyrs);
+        storage.data.push(vec);
+        storage.nodes.push(node);
         insert_idx
     }
 
-    fn publish_node(
-        &self,
-        storage: &RwLockReadGuard<'_, Storage<D>>,
-        insert_idx: usize,
-        select_ctx: &mut SelectContext,
-        lyr: usize,
-    ) {
-        let links: Vec<Link> = {
-            let links = storage.nodes[insert_idx].layers[lyr].read().unwrap();
-            links.iter().copied().collect()
-        };
-        for fw_link in links {
-            let backlink = Link {
-                node_index: insert_idx,
-                distance: fw_link.distance,
+    fn publish(&self, idx: usize, max_lyr: usize, select_ctx: &mut SelectContext) {
+        let storage = self.storage.read().unwrap();
+        for lyr in 0..=max_lyr {
+            let links: Vec<Link> = {
+                let links = storage.nodes[idx].layers[lyr].read().unwrap();
+                links.iter().copied().collect()
             };
-            self.add_backlink(storage, fw_link.node_index, backlink, lyr, select_ctx);
+            for fw_link in links {
+                let backlink = Link {
+                    node_index: idx,
+                    distance: fw_link.distance,
+                };
+                self.add_backlink(&storage, fw_link.node_index, backlink, lyr, select_ctx);
+            }
         }
+
+        self.update_entry_point_if_required(idx, max_lyr);
     }
 
-    fn tmp_node(&self) -> (Node, usize) {
-        let insert_lyr = self.random_layer();
-        let mut node = Node {
-            layers: Vec::with_capacity(insert_lyr + 1),
+    fn new_node(&self) -> (Node, usize) {
+        let max_lyr = self.random_layer();
+        let node = Node {
+            layers: (0..max_lyr + 1)
+                .map(|lyr| {
+                    let max_connections = self.max_connections(lyr);
+                    RwLock::new(Vec::with_capacity(max_connections))
+                })
+                .collect(),
         };
-        for lyr in 0..=insert_lyr {
-            let max_connections = self.max_connections(lyr);
-            node.layers
-                .push(RwLock::new(Vec::with_capacity(max_connections)));
-        }
-        (node, insert_lyr)
+
+        (node, max_lyr)
     }
 
-    // fn preallocate_nodes(&mut self, vecs: &[[f32; D]]) -> Vec<(usize, usize)> {
-    //     assert!(
-    //         self.is_empty(),
-    //         "node preallocation is only suppored on an empty graph"
-    //     );
-    //
-    //     let mut nodes = Vec::with_capacity(vecs.len());
-    //     for vec in vecs {
-    //         let (insert_idx, insert_lyr) = self.init_node(*vec);
-    //         nodes.push((insert_idx, insert_lyr));
-    //         self.update_entry_point_if_required(insert_idx, insert_lyr);
-    //     }
-    //
-    //     nodes
-    // }
+    fn preallocate_nodes(&self, vecs: &[[f32; D]]) -> Vec<(usize, usize)> {
+        let mut storage = self.storage.write().unwrap();
+        let mut out = Vec::new();
+        for vec in vecs {
+            let (node, max_lyr) = self.new_node();
+            let idx = storage.data.len();
+            storage.nodes.push(node);
+            storage.data.push(*vec);
+
+            out.push((idx, max_lyr));
+        }
+
+        out
+    }
 
     fn update_entry_point_if_required(&self, insert_idx: usize, insert_lyr: usize) {
         let mut entry = self.entry.write().unwrap();
@@ -350,7 +319,7 @@ where
 {
     fn search_layer_with_context<'a>(
         &self,
-        storage: &RwLockReadGuard<'_, Storage<D>>,
+        storage: &Storage<D>,
         q: &[f32; D],
         ep: usize,
         lyr: usize,
@@ -465,9 +434,10 @@ impl<const D: usize, DS> Hnsw<D, DS>
 where
     DS: Distance<D>,
 {
+    #[allow(clippy::too_many_arguments)]
     fn select_neighbors(
         &self,
-        storage: &RwLockReadGuard<'_, Storage<D>>,
+        storage: &Storage<D>,
         qv: &[f32; D],
         lyr: usize,
         candidates: &[Link],

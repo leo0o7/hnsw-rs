@@ -165,15 +165,7 @@ fn prepare_index<const DIM: usize>(
 
             let build_start = Instant::now();
             if config.build_parallel {
-                let internal_ids = index.build_parallel(base);
-                let mut ground_truth = data.ground_truth.clone();
-
-                for expected in &mut ground_truth {
-                    for original_id in expected {
-                        *original_id = internal_ids[*original_id];
-                    }
-                }
-                data.ground_truth = ground_truth;
+                index.build_parallel(base);
             } else {
                 let mut insert_ctx = index.insert_context();
                 for &vector in base {
