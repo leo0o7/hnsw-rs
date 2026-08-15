@@ -5,9 +5,9 @@ use super::{
     measurement::{Metrics, PqBenchData},
 };
 use serde::Serialize;
-use std::{error::Error, fs, path::Path, time::Duration};
+use std::{error::Error, fs, num::NonZeroUsize, path::Path, time::Duration};
 
-const BENCHMARK_REPORT_SCHEMA_VERSION: u32 = 1;
+const BENCHMARK_REPORT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize)]
 struct BenchmarkReport {
@@ -55,10 +55,20 @@ pub(crate) struct RunReport {
     load_path: Option<String>,
     save_time_s: Option<f64>,
     save_path: Option<String>,
+    build_mode: Option<&'static str>,
+    build_repetition: Option<usize>,
+    build_threads: Option<usize>,
+    effective_build_threads: Option<usize>,
     pq_oracle_recall: Option<f64>,
 }
 
-pub(crate) fn run_entry(params: BenchConfig, ef_search: usize, metrics: &Metrics) -> RunReport {
+pub(crate) fn run_entry(
+    params: BenchConfig,
+    repetition: usize,
+    ef_search: usize,
+    metrics: &Metrics,
+) -> RunReport {
+    let was_built = metrics.index.build_time.is_some();
     RunReport {
         m: params.m,
         m0: params.m0,
@@ -80,6 +90,14 @@ pub(crate) fn run_entry(params: BenchConfig, ef_search: usize, metrics: &Metrics
         load_path: metrics.index.load_path.clone(),
         save_time_s: duration_seconds(metrics.index.save_time),
         save_path: metrics.index.save_path.clone(),
+        build_mode: was_built.then(|| params.build_mode.label()),
+        build_repetition: was_built.then_some(repetition),
+        build_threads: if was_built {
+            params.build_threads.map(NonZeroUsize::get)
+        } else {
+            None
+        },
+        effective_build_threads: metrics.index.effective_build_threads,
         pq_oracle_recall: metrics.pq_oracle_recall,
     }
 }
@@ -161,6 +179,7 @@ pub(crate) fn print_header<const DIM: usize, const Q: usize>(
 
 pub(crate) fn print_metrics(
     params: BenchConfig,
+    repetition: usize,
     ef_search: usize,
     k: usize,
     metrics: &Metrics,
@@ -174,6 +193,25 @@ pub(crate) fn print_metrics(
         params.m, params.m0, params.ef_construction, ef_search
     );
     if print_index_timings {
+        if index.build_time.is_some() {
+            if let Some(effective_threads) = index.effective_build_threads {
+                println!(
+                    "  build mode: {} (repetition {}, requested threads {}, effective threads {})",
+                    params.build_mode.label(),
+                    repetition + 1,
+                    params
+                        .build_threads
+                        .map_or_else(|| "auto".to_owned(), |threads| threads.to_string()),
+                    effective_threads,
+                );
+            } else {
+                println!(
+                    "  build mode: {} (repetition {})",
+                    params.build_mode.label(),
+                    repetition + 1,
+                );
+            }
+        }
         if let Some(load_time) = index.load_time {
             if let Some(path) = &index.load_path {
                 println!("  load: {:.3}s ({path})", load_time.as_secs_f64());

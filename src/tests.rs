@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::{fs, path::PathBuf};
+use std::{fs, num::NonZeroUsize, path::PathBuf};
 
 use super::*;
 use rand::RngExt;
@@ -320,7 +320,7 @@ fn test_parallel_build_recall() {
             .unwrap();
         vecs.push(v)
     }
-    knn.build_parallel(&vecs);
+    knn.build_parallel(&vecs, None);
 
     let queries: Vec<[f32; DIMS]> = (0..N_RECALL_QUERIES)
         .map(|_| {
@@ -335,4 +335,24 @@ fn test_parallel_build_recall() {
     let avg_recall = measure_recall(knn, K, &queries);
     println!("avg recall: {:.1}%", avg_recall * 100.0);
     assert!(avg_recall >= MIN_RECALL);
+}
+
+#[test]
+fn test_parallel_extend_returns_a_permutation_of_ids() {
+    const N: usize = 256;
+    const DIMS: usize = 8;
+
+    let vecs: Vec<[f32; DIMS]> = (0..N).map(|index| [index as f32; DIMS]).collect();
+    let knn = Hnsw::<DIMS>::new_default(16);
+    let ids = knn.extend_parallel(&vecs, NonZeroUsize::new(2));
+
+    let storage = knn.storage.read().unwrap();
+    for (original_id, &internal_id) in ids.iter().enumerate() {
+        assert_eq!(storage.data[internal_id], vecs[original_id]);
+    }
+
+    let mut ids = ids;
+    ids.sort_unstable();
+    assert_eq!(ids, (0..N).collect::<Vec<_>>());
+    assert_eq!(knn.len(), N);
 }

@@ -15,7 +15,7 @@ run_config() {
   )
 }
 
-build() {
+build_sequential() {
   run_config "$CONFIG_ROOT/build/m-sweep/sift-1m.toml"
   run_config "$CONFIG_ROOT/build/m-sweep/mnist-60k.toml"
   run_config "$CONFIG_ROOT/build/ef-construction-sweep/sift-1m.toml"
@@ -23,6 +23,29 @@ build() {
   run_config "$CONFIG_ROOT/build/size-sweep/sift-250k.toml"
   run_config "$CONFIG_ROOT/build/size-sweep/sift-500k.toml"
   run_config "$CONFIG_ROOT/build/size-sweep/sift-1m.toml"
+}
+
+build_parallel() {
+  run_config "$CONFIG_ROOT/build/parallel-construction/sift-1m.toml"
+}
+
+build() {
+  case "${1:-both}" in
+  sequential)
+    build_sequential
+    ;;
+  parallel)
+    build_parallel
+    ;;
+  both)
+    build_sequential
+    build_parallel
+    ;;
+  *)
+    printf 'usage: %s build {sequential|parallel|both}\n' "$0" >&2
+    exit 2
+    ;;
+  esac
 }
 
 measure() {
@@ -49,7 +72,7 @@ plot() {
 stage="${1:-all}"
 case "$stage" in
 build)
-  build
+  build "${2:-both}"
   ;;
 measure)
   measure
@@ -58,12 +81,12 @@ plot)
   plot
   ;;
 all)
-  build
+  build both
   measure
   plot
   ;;
 *)
-  printf 'usage: %s {build|measure|plot|all}\n' "$0" >&2
+  printf 'usage: %s {build [sequential|parallel|both]|measure|plot|all}\n' "$0" >&2
   exit 2
   ;;
 esac

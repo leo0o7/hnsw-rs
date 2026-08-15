@@ -17,7 +17,7 @@ The tradeoff is the usual one for approximate search: searches are much faster t
 - [x] squared L2 distance
 - [x] product quantization
 - [x] custom distance metrics
-- [ ] parallel construction
+- [x] parallel construction
 
 ### Non goals
 
@@ -88,6 +88,15 @@ Search curves sweep `ef_search`. Higher values generally improve recall while re
 
 ![Dataset-size scaling](benchmarks/plots/size_scaling.svg)
 
+### Parallel construction
+
+Construction can be run sequentially, dynamically with concurrent inserts, or in a batched mode optimized for building an empty index.
+Both parallel methods take an optional worker count; `None` uses available parallelism.
+
+![Parallel construction](benchmarks/plots/parallel_construction.svg)
+
+![Parallel construction scaling](benchmarks/plots/parallel_scaling.svg)
+
 ### Product quantization
 
 ![Product-quantization trade-off](benchmarks/plots/pq_tradeoff.svg)
@@ -118,6 +127,11 @@ Once the closest item in the frontier is already worse than the worst item in th
 
 Insertion uses the same idea. It searches the existing graph to find candidate neighbors for the new node, prunes that candidate set, links the new node, and adds backlinks from the selected neighbors.
 If an existing node gets too many links, its neighbor list is pruned again.
+
+Two parallel construction modes are available.
+Dynamic construction inserts vectors into the graph concurrently and can also extend a non-empty index.
+Batched construction preallocates the nodes for an empty graph before linking them in parallel, which avoids some per-insert synchronization and is the faster build path when all vectors are available up front.
+Both parallel construction methods take an optional worker count; `None` uses available parallelism.
 
 ## Some implementation choices
 

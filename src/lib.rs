@@ -8,6 +8,7 @@ use crate::{
 use std::{
     cmp::Reverse,
     mem::size_of,
+    num::NonZeroUsize,
     sync::{Mutex, RwLock},
 };
 
@@ -125,7 +126,7 @@ where
         self.insert_with_context(vec, &mut ctx)
     }
 
-    pub fn build_parallel(&mut self, vecs: &[[f32; D]]) {
+    pub fn build_parallel(&mut self, vecs: &[[f32; D]], threads: Option<NonZeroUsize>) {
         assert!(
             self.is_empty(),
             "parallel construction is only supported on an empty graph"
@@ -150,9 +151,7 @@ where
             return;
         }
 
-        let nthreads = std::thread::available_parallelism()
-            .expect("unable to get number available of threads")
-            .get();
+        let nthreads = parallel_thread_count(threads);
         let chunk_sz = nodes.len().div_ceil(nthreads);
 
         let index = &*self;
@@ -168,7 +167,7 @@ where
         });
     }
 
-    pub fn extend_parallel(&self, vecs: &[[f32; D]]) -> Vec<usize> {
+    pub fn extend_parallel(&self, vecs: &[[f32; D]], threads: Option<NonZeroUsize>) -> Vec<usize> {
         assert!(
             !vecs.is_empty(),
             "parallel extension requires at least one vector"
@@ -180,9 +179,7 @@ where
         }
         let vecs = &vecs[1..];
 
-        let nthreads = std::thread::available_parallelism()
-            .expect("unable to get number available of threads")
-            .get();
+        let nthreads = parallel_thread_count(threads);
         let chunk_sz = vecs.len().div_ceil(nthreads);
         std::thread::scope(|s| {
             for (chunk, interal_ids) in vecs
@@ -382,6 +379,14 @@ where
             entry.1 = insert_lyr;
         }
     }
+}
+
+fn parallel_thread_count(requested: Option<NonZeroUsize>) -> usize {
+    let available =
+        std::thread::available_parallelism().expect("unable to get number available of threads");
+    requested
+        .map_or(available, |requested| requested.min(available))
+        .get()
 }
 
 // SEARCH

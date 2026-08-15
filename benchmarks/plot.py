@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -22,7 +23,6 @@ from matplotlib.ticker import (
     NullFormatter,
     NullLocator,
 )
-
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "benchmarks" / "results"
@@ -49,6 +49,9 @@ REPORT_PATHS = {
     "pq32": "measure/pq/m-sweep/sift-1m-pq32.json",
     "pq64": "measure/pq/m-sweep/sift-1m-pq64.json",
     "pq128": "measure/pq/m-sweep/sift-1m-pq128.json",
+}
+OPTIONAL_REPORT_PATHS = {
+    "parallel_construction": "build/parallel-construction/sift-1m.json",
 }
 
 GRAPH_COLORS = {
@@ -78,11 +81,28 @@ def load_reports() -> dict[str, dict[str, Any]]:
         "qps",
         "memory_mib",
     }
+    parallel_run_fields = {
+        "build_mode",
+        "build_repetition",
+        "build_threads",
+        "effective_build_threads",
+        "build_time_s",
+        "insert_qps",
+    }
 
-    for name, relative_path in REPORT_PATHS.items():
+    report_paths = [
+        (name, relative_path, True) for name, relative_path in REPORT_PATHS.items()
+    ]
+    report_paths.extend(
+        (name, relative_path, False)
+        for name, relative_path in OPTIONAL_REPORT_PATHS.items()
+    )
+    for name, relative_path, required in report_paths:
         path = RESULTS / relative_path
         if not path.is_file():
-            raise SystemExit(f"missing benchmark report: {path}")
+            if required:
+                raise SystemExit(f"missing benchmark report: {path}")
+            continue
         try:
             report = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
@@ -95,6 +115,17 @@ def load_reports() -> dict[str, dict[str, Any]]:
             if not required_run_fields.issubset(run):
                 missing = sorted(required_run_fields - run.keys())
                 raise SystemExit(f"{path} is missing run fields: {', '.join(missing)}")
+            if name == "parallel_construction":
+                if not parallel_run_fields.issubset(run):
+                    missing = sorted(parallel_run_fields - run.keys())
+                    raise SystemExit(
+                        f"{path} is missing parallel run fields: {', '.join(missing)}"
+                    )
+                if run["build_mode"] in ("dynamic", "batched") and (
+                    run["build_threads"] is None
+                    or run["effective_build_threads"] is None
+                ):
+                    raise SystemExit(f"{path} has a parallel run without worker counts")
         reports[name] = report
 
     return reports
@@ -351,13 +382,175 @@ def plot_pq_tradeoff(reports: dict[str, dict[str, Any]], output_dir: Path) -> No
     plt.close(figure)
 
 
+def summary(rows: list[dict[str, Any]], field: str) -> tuple[float, float, float]:
+    values = sorted(float(row[field]) for row in rows)
+    return median(values), values[0], values[-1]
+
+
+def error_bars(summaries: list[tuple[float, float, float]]) -> list[list[float]]:
+    return [
+        [median_value - minimum for median_value, minimum, _ in summaries],
+        [maximum - median_value for median_value, _, maximum in summaries],
+    ]
+
+
+def parallel_rows(
+    report: dict[str, Any], mode: str, build_threads: int | None = None
+) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in report["runs"]
+        if row.get("build_mode") == mode
+        and (
+            build_threads is None or row.get("build_threads") == build_threads
+        )
+    ]
+
+
+def plot_parallel_construction(
+    reports: dict[str, dict[str, Any]], output_dir: Path
+) -> None:
+    report = reports["parallel_construction"]
+    requested_threads = [
+        int(row["build_threads"])
+        for row in report["runs"]
+        if row.get("build_mode") in ("dynamic", "batched")
+    ]
+    if not requested_threads:
+        raise SystemExit("parallel construction report has no parallel rows")
+
+    full_machine_threads = max(requested_threads)
+    rows_by_mode = {
+        "sequential": parallel_rows(report, "sequential"),
+        "dynamic": parallel_rows(report, "dynamic", full_machine_threads),
+        "batched": parallel_rows(report, "batched", full_machine_threads),
+    }
+    if any(not rows for rows in rows_by_mode.values()):
+        raise SystemExit("parallel construction report is missing full-machine rows")
+
+    modes = ("sequential", "dynamic", "batched")
+    labels = ("Sequential", "Dynamic", "Batched")
+    colors = ("#222222", "#D55E00", "#009E73")
+    build_summaries = [summary(rows_by_mode[mode], "build_time_s") for mode in modes]
+    recall_summaries = [summary(rows_by_mode[mode], "recall") for mode in modes]
+    build_medians = [item[0] for item in build_summaries]
+    recall_medians = [item[0] for item in recall_summaries]
+    baseline = build_medians[0]
+
+    figure, (build_axis, recall_axis) = plt.subplots(
+        1, 2, figsize=FIGURE_SIZE, layout="constrained"
+    )
+    build_axis.bar(
+        labels,
+        build_medians,
+        yerr=error_bars(build_summaries),
+        color=colors,
+        capsize=4,
+        error_kw={"elinewidth": 1, "capthick": 1},
+    )
+    for index, value in enumerate(build_medians):
+        build_axis.text(
+            index,
+            build_summaries[index][2] * 1.04,
+            f"{baseline / value:.1f}x",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+    recall_axis.bar(
+        labels,
+        recall_medians,
+        yerr=error_bars(recall_summaries),
+        color=colors,
+        capsize=4,
+        error_kw={"elinewidth": 1, "capthick": 1},
+    )
+    recall_axis.axhline(
+        recall_medians[0], color="#222222", linewidth=0.9, linestyle="--"
+    )
+    build_axis.set_ylabel("Build time (s)")
+    recall_axis.set_ylabel("Recall@10")
+    recall_axis.set_ylim(
+        max(0.0, min(item[1] for item in recall_summaries) - 0.02),
+        min(1.0, max(item[2] for item in recall_summaries) + 0.01),
+    )
+    for axis in (build_axis, recall_axis):
+        axis.tick_params(axis="x", rotation=20)
+        style_axis(axis)
+    effective_threads = {
+        int(row["effective_build_threads"])
+        for mode in ("dynamic", "batched")
+        for row in rows_by_mode[mode]
+    }
+    if len(effective_threads) != 1:
+        raise SystemExit("parallel construction rows disagree on effective worker count")
+    figure.suptitle(
+        f"Parallel construction on SIFT-1M ({effective_threads.pop()} workers)"
+    )
+    figure.savefig(
+        output_dir / "parallel_construction.svg", format="svg", bbox_inches="tight"
+    )
+    plt.close(figure)
+
+
+def plot_parallel_scaling(reports: dict[str, dict[str, Any]], output_dir: Path) -> None:
+    report = reports["parallel_construction"]
+    figure, axis = plt.subplots(figsize=FIGURE_SIZE, layout="constrained")
+    colors = {"dynamic": "#D55E00", "batched": "#009E73"}
+    labels = {"dynamic": "Dynamic", "batched": "Batched"}
+    for mode in ("dynamic", "batched"):
+        rows = parallel_rows(report, mode)
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(int(row["build_threads"]), []).append(row)
+        thread_counts = sorted(grouped)
+        values = [summary(grouped[threads], "insert_qps") for threads in thread_counts]
+        medians = [item[0] for item in values]
+        axis.errorbar(
+            thread_counts,
+            medians,
+            yerr=error_bars(values),
+            color=colors[mode],
+            marker="o" if mode == "dynamic" else "s",
+            capsize=4,
+            label=labels[mode],
+        )
+
+    sequential = parallel_rows(report, "sequential")
+    sequential_median, _, _ = summary(sequential, "insert_qps")
+    axis.axhline(
+        sequential_median,
+        color="#222222",
+        linestyle="--",
+        linewidth=1.2,
+        label="Sequential baseline",
+    )
+    axis.set_xlabel("Requested worker count")
+    axis.set_ylabel("Construction throughput (inserts/s)")
+    axis.set_xticks(
+        sorted(
+            {
+                int(row["build_threads"])
+                for row in report["runs"]
+                if row.get("build_mode") in ("dynamic", "batched")
+            }
+        )
+    )
+    axis.legend(loc="best")
+    style_axis(axis)
+    figure.suptitle("Parallel construction scaling on SIFT-1M")
+    figure.savefig(output_dir / "parallel_scaling.svg", format="svg", bbox_inches="tight")
+    plt.close(figure)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT,
-        help="directory for the four SVG files",
+        help="directory for the SVG files",
     )
     args = parser.parse_args()
 
@@ -368,6 +561,9 @@ def main() -> None:
     plot_construction_tradeoff(reports, args.output_dir)
     plot_size_scaling(reports, args.output_dir)
     plot_pq_tradeoff(reports, args.output_dir)
+    if "parallel_construction" in reports:
+        plot_parallel_construction(reports, args.output_dir)
+        plot_parallel_scaling(reports, args.output_dir)
     print(f"wrote figures to {args.output_dir}")
 
 
