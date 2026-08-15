@@ -1,4 +1,10 @@
-use std::{error::Error, fs::File, io::BufWriter, path::Path};
+use std::{
+    error::Error,
+    fs::File,
+    io::BufWriter,
+    path::Path,
+    sync::{Mutex, RwLock},
+};
 
 use rand::{
     SeedableRng,
@@ -10,7 +16,7 @@ use serde::{
     ser::{SerializeSeq, SerializeStruct},
 };
 
-use crate::{Hnsw, dist::Distance, node::Node};
+use crate::{Hnsw, Storage, dist::Distance, node::Node};
 
 struct FlatF32<'a, const D: usize>(&'a [[f32; D]]);
 impl<'a, const D: usize> From<&'a [[f32; D]]> for FlatF32<'a, D> {
@@ -78,13 +84,17 @@ where
         S: serde::Serializer,
     {
         let mut state = serializer.serialize_struct("Hnsw", 9)?;
+        let (ep, max_layer) = *self.entry.read().unwrap();
         state.serialize_field("M", &(self.M as u64))?;
         state.serialize_field("M0", &(self.M0 as u64))?;
         state.serialize_field("ef_construction", &(self.ef_construction as u64))?;
-        state.serialize_field("entry_point", &(self.entry_point as u64))?;
-        state.serialize_field("data", &FlatF32::from(self.data.as_slice()))?;
-        state.serialize_field("nodes", &self.nodes)?;
-        state.serialize_field("max_layer", &(self.max_layer as u64))?;
+        state.serialize_field("entry_point", &(ep as u64))?;
+        state.serialize_field(
+            "data",
+            &FlatF32::from(self.storage.read().unwrap().data.as_slice()),
+        )?;
+        state.serialize_field("nodes", &self.storage.read().unwrap().nodes)?;
+        state.serialize_field("max_layer", &(max_layer as u64))?;
         state.serialize_field("ml", &self.ml)?;
         state.serialize_field("seed", &self.seed)?;
         state.serialize_field("dist", &self.dist)?;
@@ -123,13 +133,14 @@ where
             M: disk.M,
             M0: disk.M0,
             ef_construction: disk.ef_construction,
-            entry_point: disk.entry_point,
-            data,
-            nodes: disk.nodes,
-            max_layer: disk.max_layer,
+            entry: RwLock::new((disk.entry_point, disk.max_layer)),
+            storage: RwLock::new(Storage {
+                data,
+                nodes: disk.nodes,
+            }),
             ml: disk.ml,
             seed: disk.seed,
-            rng,
+            rng: Mutex::new(rng),
             dist: disk.dist,
         })
     }

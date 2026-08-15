@@ -24,21 +24,21 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
     ) -> Self {
         assert_eq!(
             quantized_data.len(),
-            hnsw.nodes.len(),
+            hnsw.storage.read().unwrap().nodes.len(),
             "quantized data length must match HNSW index length"
         );
         Self {
-            entry_point: hnsw.entry_point,
+            entry_point: hnsw.entry.read().unwrap().0,
             data: quantized_data,
-            nodes: hnsw.nodes,
-            max_layer: hnsw.max_layer,
+            nodes: std::mem::take(&mut hnsw.storage.write().unwrap().nodes),
+            max_layer: hnsw.entry.read().unwrap().1,
             pq,
         }
     }
 
-    pub(crate) fn from_hnsw(mut hnsw: Hnsw<D, L2Squared>, k: usize) -> Self {
+    pub(crate) fn from_hnsw(hnsw: Hnsw<D, L2Squared>, k: usize) -> Self {
         let mut pq: ProductQuantizer<Q, D> = ProductQuantizer::new(k);
-        let hnsw_data = std::mem::take(&mut hnsw.data);
+        let hnsw_data = std::mem::take(&mut hnsw.storage.write().unwrap().data);
         pq.fit(&hnsw_data);
 
         Self::from_pq(

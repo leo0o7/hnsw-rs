@@ -63,7 +63,7 @@ fn measure_recall<const D: usize>(index: Hnsw<D>, k: usize, queries: &[[f32; D]]
     let mut total_recall = 0.0;
     for query in queries {
         let graph_results = index.search(query, k);
-        let brute_results = brute_force_knn(&index.data, query, k);
+        let brute_results = brute_force_knn(&index.storage.read().unwrap().data, query, k);
         total_recall += calculate_recall(graph_results, brute_results);
     }
     total_recall / queries.len() as f32
@@ -71,7 +71,7 @@ fn measure_recall<const D: usize>(index: Hnsw<D>, k: usize, queries: &[[f32; D]]
 
 #[test]
 fn test_knn() {
-    let mut knn = Hnsw::<2>::new_default(5);
+    let knn = Hnsw::<2>::new_default(5);
     knn.insert([0.0, 0.0]);
     knn.insert([3.0, 3.0]);
     knn.insert([4.0, 4.0]);
@@ -87,7 +87,7 @@ fn test_knn() {
 
 #[test]
 fn test_k_larger_than_number_of_entries() {
-    let mut knn = Hnsw::<1>::new_default(5);
+    let knn = Hnsw::<1>::new_default(5);
     knn.insert([1.0]);
     knn.insert([2.0]);
 
@@ -97,7 +97,7 @@ fn test_k_larger_than_number_of_entries() {
 
 #[test]
 fn test_duplicate() {
-    let mut knn = Hnsw::<1>::new_default(5);
+    let knn = Hnsw::<1>::new_default(5);
     knn.insert([0.0]);
     knn.insert([2.0]);
     knn.insert([2.0]);
@@ -129,7 +129,7 @@ fn search_with_ef_rejects_zero_effort() {
 
 #[test]
 fn default_search_matches_explicit_default_ef() {
-    let mut index = Hnsw::<2>::new_seeded(4, 8, 16, 42, L2Squared);
+    let index = Hnsw::<2>::new_seeded(4, 8, 16, 42, L2Squared);
     for point in [[0.0, 0.0], [1.0, 1.0], [3.0, 3.0], [4.0, 4.0]] {
         index.insert(point);
     }
@@ -146,7 +146,7 @@ fn default_search_matches_explicit_default_ef() {
 
 #[test]
 fn pq_search_accepts_explicit_ef() {
-    let mut index = Hnsw::<2>::new_seeded(4, 8, 16, 42, L2Squared);
+    let index = Hnsw::<2>::new_seeded(4, 8, 16, 42, L2Squared);
     for point in [[0.0, 0.0], [1.0, 1.0], [3.0, 3.0], [4.0, 4.0]] {
         index.insert(point);
     }
@@ -158,7 +158,7 @@ fn pq_search_accepts_explicit_ef() {
 
 #[test]
 fn custom_distance_controls_search_order() {
-    let mut knn = Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
+    let knn = Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
     knn.insert([10.0, 0.0]);
     knn.insert([0.0, 2.0]);
     knn.insert([0.0, 3.0]);
@@ -171,8 +171,7 @@ fn custom_distance_controls_search_order() {
 #[test]
 fn stateful_distance_survives_save_load() {
     let path = temp_path("weighted-distance");
-    let mut original =
-        Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
+    let original = Hnsw::<2, Weighted2D>::new_seeded(2, 4, 16, 42, Weighted2D { x: 0.0, y: 1.0 });
     original.insert([10.0, 0.0]);
     original.insert([0.0, 2.0]);
     original.insert([0.0, 3.0]);
@@ -188,7 +187,7 @@ fn stateful_distance_survives_save_load() {
 #[test]
 #[should_panic(expected = "quantized data length must match HNSW index length")]
 fn freeze_with_pq_rejects_mismatched_quantized_data() {
-    let mut hnsw = Hnsw::<1>::new_default(2);
+    let hnsw = Hnsw::<1>::new_default(2);
     hnsw.insert([1.0]);
     hnsw.insert([2.0]);
 
@@ -203,13 +202,13 @@ fn test_save_load_roundtrip_search_and_insert() {
     let path = temp_path("roundtrip");
     let query = [1.0, 1.0];
 
-    let mut original = Hnsw::<2>::new_seeded(5, 10, 128, 42, L2Squared);
+    let original = Hnsw::<2>::new_seeded(5, 10, 128, 42, L2Squared);
     original.insert([0.0, 0.0]);
     original.insert([3.0, 3.0]);
     original.insert([4.0, 4.0]);
 
     original.save(&path).unwrap();
-    let mut loaded = Hnsw::<2>::load(&path).unwrap();
+    let loaded = Hnsw::<2>::load(&path).unwrap();
 
     assert_eq!(loaded.search(&query, 2), original.search(&query, 2));
 
@@ -223,13 +222,13 @@ fn test_save_load_roundtrip_search_and_insert() {
 
 #[test]
 fn test_max_connections() {
-    let mut h = Hnsw::<2>::new_default(8);
+    let h = Hnsw::<2>::new_default(8);
 
     for i in 0..100 {
         h.insert([i as f32, 0.0]);
     }
 
-    for node in &h.nodes {
+    for node in &h.storage.read().unwrap().nodes {
         for (lyr, neighs) in node
             .layers
             .iter()
@@ -250,13 +249,13 @@ fn test_max_connections() {
 
 #[test]
 fn test_no_duplicate_neighbors() {
-    let mut h = Hnsw::<2>::new_default(8);
+    let h = Hnsw::<2>::new_default(8);
 
     for i in 0..100 {
         h.insert([i as f32, 0.0]);
     }
 
-    for node in &h.nodes {
+    for node in &h.storage.read().unwrap().nodes {
         for neighs in &node.layers {
             let mut seen = std::collections::HashSet::new();
             for n in neighs.read().unwrap().iter() {
@@ -275,7 +274,7 @@ fn test_avg_recall() {
     const N_RECALL_QUERIES: usize = 1000;
 
     let mut rng = rand::rng();
-    let mut knn = Hnsw::<DIMS>::new_default(M);
+    let knn = Hnsw::<DIMS>::new_default(M);
 
     for _ in 0..N {
         let v: [f32; DIMS] = (0..DIMS)

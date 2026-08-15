@@ -137,7 +137,7 @@ fn validate_configs(configs: &[BenchConfig], ef_searches: &[usize]) -> Result<()
 fn run<const DIM: usize, const Q: usize>(config: &BenchFile) -> Result<(), Box<dyn Error>> {
     validate_configs(&config.configs, &config.ef_searches)?;
     let quantized = config.quantized;
-    let data = dataset::load_bench_data::<DIM>(config)?;
+    let mut data = dataset::load_bench_data::<DIM>(config)?;
     let pq_data = quantized.map(|quantized| precompute_pq::<DIM, Q>(&data.base, quantized.pq_k));
     report::print_header(config, &data, quantized, pq_data.as_ref());
 
@@ -152,7 +152,7 @@ fn run<const DIM: usize, const Q: usize>(config: &BenchFile) -> Result<(), Box<d
 
     for params in config.configs.iter().copied() {
         let metrics = run_benchmark::<DIM, Q>(
-            &data,
+            &mut data,
             params,
             &config.ef_searches,
             config,

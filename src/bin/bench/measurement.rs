@@ -70,14 +70,14 @@ pub(crate) fn precompute_pq<const DIM: usize, const Q: usize>(
 }
 
 pub(crate) fn run_benchmark<const DIM: usize, const Q: usize>(
-    data: &BenchData<DIM>,
+    data: &mut BenchData<DIM>,
     params: BenchConfig,
     ef_searches: &[usize],
     config: &BenchFile,
     quantized: Option<QuantizedConfig>,
     pq_data: Option<&PqBenchData<DIM, Q>>,
 ) -> Result<Vec<SearchRun>, Box<dyn Error>> {
-    let (index, timings) = prepare_index(&data.base, params, config)?;
+    let (index, timings) = prepare_index(data, params, config)?;
 
     if let Some(quantized) = quantized {
         let pq_data = pq_data.ok_or("quantized benchmark is missing precomputed PQ data")?;
@@ -120,10 +120,11 @@ pub(crate) fn run_benchmark<const DIM: usize, const Q: usize>(
 }
 
 fn prepare_index<const DIM: usize>(
-    base: &[[f32; DIM]],
+    data: &mut BenchData<DIM>,
     params: BenchConfig,
     config: &BenchFile,
 ) -> Result<(Hnsw<DIM>, IndexTimings), Box<dyn Error>> {
+    let base = &data.base;
     let load_path = config
         .load_index_prefix
         .as_deref()
@@ -164,7 +165,15 @@ fn prepare_index<const DIM: usize>(
 
             let build_start = Instant::now();
             if config.build_parallel {
-                index.build_parallel(base);
+                let internal_ids = index.build_parallel(base);
+                let mut ground_truth = data.ground_truth.clone();
+
+                for expected in &mut ground_truth {
+                    for original_id in expected {
+                        *original_id = internal_ids[*original_id];
+                    }
+                }
+                data.ground_truth = ground_truth;
             } else {
                 let mut insert_ctx = index.insert_context();
                 for &vector in base {
