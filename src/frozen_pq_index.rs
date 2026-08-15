@@ -141,7 +141,7 @@ impl<const D: usize, const Q: usize> HnswSearcher<D> for FrozenPQHnsw<D, Q> {
         ctx: &mut SearchContext,
     ) -> Vec<(usize, f32)> {
         assert!(ef_search > 0, "ef_search must be > 0");
-        if self.data.is_empty() {
+        if self.is_empty() {
             return Vec::new();
         }
 
@@ -174,5 +174,9 @@ impl<const D: usize, const Q: usize> HnswSearcher<D> for FrozenPQHnsw<D, Q> {
 
     fn len(&self) -> usize {
         self.data.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.data.is_empty()
     }
 }

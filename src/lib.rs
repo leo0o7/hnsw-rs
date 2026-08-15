@@ -67,6 +67,8 @@ pub trait HnswSearcher<const D: usize> {
     fn memory_usage_bytes(&self) -> usize;
 
     fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool;
 }
 
 // CREATE
@@ -427,6 +429,10 @@ where
     fn len(&self) -> usize {
         self.storage.read().unwrap().data.len()
     }
+
+    fn is_empty(&self) -> bool {
+        self.storage.read().unwrap().data.is_empty()
+    }
 }
 
 // MISC
@@ -584,10 +590,6 @@ where
     fn random_layer(&self) -> usize {
         let x: f64 = Open01.sample(&mut self.rng.lock().unwrap());
         (-x.ln() * self.ml).floor() as usize
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.storage.read().unwrap().data.is_empty()
     }
 }
 
