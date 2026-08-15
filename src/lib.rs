@@ -8,7 +8,7 @@ use crate::{
 use std::{
     cmp::Reverse,
     mem::size_of,
-    sync::{Mutex, RwLock, RwLockReadGuard},
+    sync::{Mutex, RwLock},
 };
 
 mod context;
@@ -36,7 +36,7 @@ pub struct Hnsw<const D: usize, DS = L2Squared> {
 }
 
 #[derive(Debug)]
-pub struct Storage<const D: usize> {
+struct Storage<const D: usize> {
     pub(crate) data: Vec<[f32; D]>,
     pub(crate) nodes: Vec<Node>,
 }
@@ -68,7 +68,9 @@ pub trait HnswSearcher<const D: usize> {
 
     fn len(&self) -> usize;
 
-    fn is_empty(&self) -> bool;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 // CREATE
@@ -128,11 +130,24 @@ where
             self.is_empty(),
             "parallel construction is only supported on an empty graph"
         );
+        assert!(
+            !vecs.is_empty(),
+            "parallel construction requires at least one vector"
+        );
         let mut nodes = self.preallocate_nodes(vecs);
         // entry is already inserted
         {
             let entry = self.entry.read().unwrap();
+            assert!(
+                entry.0 < vecs.len(),
+                "entry point {} out of bounds for {} preallocated vectors",
+                entry.0,
+                vecs.len()
+            );
             nodes.swap_remove(entry.0);
+        }
+        if nodes.is_empty() {
+            return;
         }
 
         let nthreads = std::thread::available_parallelism()
@@ -154,8 +169,15 @@ where
     }
 
     pub fn extend_parallel(&self, vecs: &[[f32; D]]) -> Vec<usize> {
+        assert!(
+            !vecs.is_empty(),
+            "parallel extension requires at least one vector"
+        );
         let mut internal_id = vec![0; vecs.len()];
         internal_id[0] = self.insert(vecs[0]);
+        if vecs.len() == 1 {
+            return internal_id;
+        }
         let vecs = &vecs[1..];
 
         let nthreads = std::thread::available_parallelism()
@@ -163,7 +185,9 @@ where
             .get();
         let chunk_sz = vecs.len().div_ceil(nthreads);
         std::thread::scope(|s| {
-            for (chunk, interal_ids) in vecs.chunks(chunk_sz).zip(internal_id.chunks_mut(chunk_sz))
+            for (chunk, interal_ids) in vecs
+                .chunks(chunk_sz)
+                .zip(internal_id[1..].chunks_mut(chunk_sz))
             {
                 s.spawn(move || {
                     let mut thread_ctx = self.insert_context();
@@ -189,11 +213,28 @@ where
     }
 
     fn insert_preallocated(&self, idx: usize, max_lyr: usize, ctx: &mut InsertContext) -> usize {
-        let storage = self.storage.read().unwrap();
-        let node = &storage.nodes[idx];
-        let vec = storage.data[idx];
+        {
+            let storage = self.storage.read().unwrap();
+            assert!(
+                idx < storage.data.len(),
+                "preallocated node index {} out of bounds for {} nodes",
+                idx,
+                storage.data.len()
+            );
 
-        self.prepare_node_with_storage(&storage, vec, node, max_lyr, ctx);
+            let node = &storage.nodes[idx];
+            let vec = storage.data[idx];
+            assert_eq!(
+                node.layers.len(),
+                max_lyr + 1,
+                "preallocated node {} has {} layers, expected {}",
+                idx,
+                node.layers.len(),
+                max_lyr + 1
+            );
+
+            self.prepare_node_with_storage(&storage, vec, node, max_lyr, ctx);
+        }
         self.publish(idx, max_lyr, &mut ctx.select_ctx);
         idx
     }
@@ -208,12 +249,19 @@ where
     // assumes non empty storage
     fn prepare_node_with_storage(
         &self,
-        storage: &RwLockReadGuard<'_, Storage<D>>,
+        storage: &Storage<D>,
         vec: [f32; D],
         node: &Node,
         max_lyr: usize,
         ctx: &mut InsertContext,
     ) {
+        assert!(
+            max_lyr < node.layers.len(),
+            "node has no layer {} (only {} layers)",
+            max_lyr,
+            node.layers.len()
+        );
+
         let search_ctx = &mut ctx.search_ctx;
         let select_ctx = &mut ctx.select_ctx;
         let (mut ep, max_layer) = *self.entry.read().unwrap();
@@ -249,6 +297,10 @@ where
     }
 
     fn commit(&self, vec: [f32; D], node: Node) -> usize {
+        assert!(
+            !node.layers.is_empty(),
+            "cannot commit a node with no layers"
+        );
         let mut storage = self.storage.write().unwrap();
         let insert_idx = storage.data.len();
 
@@ -259,6 +311,19 @@ where
 
     fn publish(&self, idx: usize, max_lyr: usize, select_ctx: &mut SelectContext) {
         let storage = self.storage.read().unwrap();
+        assert!(
+            idx < storage.nodes.len(),
+            "published node index {} out of bounds for {} nodes",
+            idx,
+            storage.nodes.len()
+        );
+        assert!(
+            max_lyr < storage.nodes[idx].layers.len(),
+            "published node {} has no layer {} (only {} layers)",
+            idx,
+            max_lyr,
+            storage.nodes[idx].layers.len()
+        );
         for lyr in 0..=max_lyr {
             let links: Vec<Link> = {
                 let links = storage.nodes[idx].layers[lyr].read().unwrap();
@@ -292,7 +357,11 @@ where
 
     fn preallocate_nodes(&self, vecs: &[[f32; D]]) -> Vec<(usize, usize)> {
         let mut storage = self.storage.write().unwrap();
-        let mut out = Vec::new();
+        assert!(
+            storage.data.is_empty() && storage.nodes.is_empty(),
+            "node preallocation requires empty storage"
+        );
+        let mut out = Vec::with_capacity(vecs.len());
         for vec in vecs {
             let (node, max_lyr) = self.new_node();
             let idx = storage.data.len();
@@ -300,6 +369,7 @@ where
             storage.data.push(*vec);
 
             out.push((idx, max_lyr));
+            self.update_entry_point_if_required(idx, max_lyr);
         }
 
         out
@@ -536,7 +606,7 @@ where
 
     fn add_backlink(
         &self,
-        storage: &RwLockReadGuard<'_, Storage<D>>,
+        storage: &Storage<D>,
         at: usize,
         link: Link,
         lyr: usize,
@@ -551,6 +621,12 @@ where
         assert!(
             lyr < storage.nodes[at].layers.len(),
             "node does not exist in this layer"
+        );
+        assert!(
+            lyr < storage.nodes[link.node_index].layers.len(),
+            "backlink source node {} does not exist in layer {}",
+            link.node_index,
+            lyr
         );
         assert!(link.node_index != at, "can't link node to itself");
 
