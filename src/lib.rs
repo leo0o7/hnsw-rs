@@ -44,7 +44,7 @@ struct Storage<const D: usize> {
 
 pub trait HnswSearcher<const D: usize> {
     fn search_context(&self) -> SearchContext {
-        SearchContext::default(self.len())
+        SearchContext::reusable(self.len())
     }
 
     fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
@@ -53,7 +53,7 @@ pub trait HnswSearcher<const D: usize> {
 
     fn search_with_ef(&self, q: &[f32; D], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
         assert!(ef_search > 0, "ef_search must be > 0");
-        let mut ctx = SearchContext::with_capacity(self.len(), ef_search);
+        let mut ctx = SearchContext::one_off(ef_search);
         self.search_with_context(q, k, ef_search, &mut ctx)
     }
 
@@ -115,14 +115,11 @@ where
     DS: Distance<D> + Send + Sync,
 {
     pub fn insert_context(&self) -> InsertContext {
-        InsertContext {
-            select_ctx: SelectContext::init(self.len(), self.M0),
-            search_ctx: SearchContext::with_capacity(self.len(), self.ef_construction),
-        }
+        InsertContext::reusable(self.len(), self.ef_construction, self.M0)
     }
 
     pub fn insert(&self, vec: [f32; D]) -> usize {
-        let mut ctx = self.insert_context();
+        let mut ctx = InsertContext::one_off(self.ef_construction, self.M0);
         self.insert_with_context(vec, &mut ctx)
     }
 
@@ -412,8 +409,8 @@ where
         );
 
         ctx.clear();
-        let epoch = &mut ctx.visited;
-        epoch.advance_epoch();
+        let visited = &mut ctx.visited;
+        visited.reset();
         let frontier = &mut ctx.frontier;
         let best = &mut ctx.best;
 
@@ -423,7 +420,7 @@ where
         };
         frontier.push(Reverse(ep_link));
         best.push(ep_link);
-        epoch.mark_visited(ep);
+        visited.mark_visited(ep);
 
         while let Some(Reverse(candidate)) = frontier.pop() {
             let furthest_dist = best.peek().map_or(f32::INFINITY, |l| l.distance);
@@ -435,10 +432,10 @@ where
                 .unwrap()
                 .iter()
             {
-                if epoch.is_visited(neigh.node_index) {
+                if visited.is_visited(neigh.node_index) {
                     continue;
                 }
-                epoch.mark_visited(neigh.node_index);
+                visited.mark_visited(neigh.node_index);
                 let dist = self.distance(q, &storage.data[neigh.node_index]);
                 if best.len() == ef && best.peek().is_some_and(|furthest| furthest.distance > dist)
                 {
@@ -528,8 +525,8 @@ where
     ) -> Vec<Link> {
         assert!(lyr <= self.entry.read().unwrap().1, "layer not initialized",);
         ctx.clear();
-        let epoch = &mut ctx.visited;
-        epoch.advance_epoch();
+        let visited = &mut ctx.visited;
+        visited.reset();
         let pq = &mut ctx.pq;
         let discarded = &mut ctx.discarded;
         let best = &mut ctx.best;
@@ -539,10 +536,10 @@ where
             .iter()
             .map(|link| (&storage.nodes[link.node_index], link, link.node_index))
         {
-            if epoch.is_visited(idx) {
+            if visited.is_visited(idx) {
                 continue;
             }
-            epoch.mark_visited(idx);
+            visited.mark_visited(idx);
             pq.push(Reverse(*link));
 
             if extend {
@@ -553,10 +550,10 @@ where
                     .iter()
                     .map(|link| (&storage.data[link.node_index], link.node_index))
                 {
-                    if epoch.is_visited(idx) {
+                    if visited.is_visited(idx) {
                         continue;
                     }
-                    epoch.mark_visited(idx);
+                    visited.mark_visited(idx);
                     pq.push(Reverse(Link {
                         node_index: idx,
                         distance: self.distance(qv, vec),

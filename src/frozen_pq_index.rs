@@ -57,8 +57,8 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
         ctx: &'a mut SearchContext,
     ) -> &'a [Link] {
         ctx.clear();
-        let epoch = &mut ctx.visited;
-        epoch.advance_epoch();
+        let visited = &mut ctx.visited;
+        visited.reset();
         let frontier = &mut ctx.frontier;
         let best = &mut ctx.best;
 
@@ -68,7 +68,7 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
         };
         frontier.push(Reverse(ep_link));
         best.push(ep_link);
-        epoch.mark_visited(ep);
+        visited.mark_visited(ep);
 
         while let Some(Reverse(candidate)) = frontier.pop() {
             let furthest_dist = best.peek().map_or(f32::INFINITY, |l| l.distance);
@@ -80,10 +80,10 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
                 .unwrap()
                 .iter()
             {
-                if epoch.is_visited(neigh.node_index) {
+                if visited.is_visited(neigh.node_index) {
                     continue;
                 }
-                epoch.mark_visited(neigh.node_index);
+                visited.mark_visited(neigh.node_index);
                 let dist = self
                     .pq
                     .adc_distance(adc_table, &self.data[neigh.node_index]);
