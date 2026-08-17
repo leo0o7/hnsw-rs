@@ -3,38 +3,127 @@ dimension = 128
 top_k = 10
 warmup_queries = 100
 query_limit = 1000
-query_cycles = 10
-save_index_prefix = "data/index/ef-construction-sweep/sift-128-euclidean-1m"
+query_cycles = 100
 output_json = "benchmarks/results/build/ef-construction-sweep/sift-1m.json"
 seed = 42
-ef_searches = [32]
+ef_searches = [16, 32, 64, 128, 256, 512]
 
 [[configs]]
 m = 16
 m0 = 32
 ef_construction = 32
+build_mode = "sequential"
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 32
+build_mode = "dynamic"
+build_threads = 11
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 32
+build_mode = "batched"
+build_threads = 11
 
 [[configs]]
 m = 16
 m0 = 32
 ef_construction = 64
+build_mode = "sequential"
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 64
+build_mode = "dynamic"
+build_threads = 11
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 64
+build_mode = "batched"
+build_threads = 11
 
 [[configs]]
 m = 16
 m0 = 32
 ef_construction = 100
+build_mode = "sequential"
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 100
+build_mode = "dynamic"
+build_threads = 11
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 100
+build_mode = "batched"
+build_threads = 11
 
 [[configs]]
 m = 16
 m0 = 32
 ef_construction = 128
+build_mode = "sequential"
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 128
+build_mode = "dynamic"
+build_threads = 11
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 128
+build_mode = "batched"
+build_threads = 11
 
 [[configs]]
 m = 16
 m0 = 32
 ef_construction = 200
+build_mode = "sequential"
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 200
+build_mode = "dynamic"
+build_threads = 11
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 200
+build_mode = "batched"
+build_threads = 11
 
 [[configs]]
 m = 16
 m0 = 32
 ef_construction = 400
+build_mode = "sequential"
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 400
+build_mode = "dynamic"
+build_threads = 11
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 400
+build_mode = "batched"
+build_threads = 11

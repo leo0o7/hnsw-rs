@@ -1,0 +1,24 @@
+dataset_path = "data/sift-128-euclidean.hdf5"
+dimension = 128
+top_k = 10
+warmup_queries = 100
+query_limit = 1000
+query_cycles = 1
+base_limit = 100000
+output_json = "benchmarks/results/build/parallel-construction/size-sift-100k.json"
+seed = 42
+ef_searches = [32]
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 200
+build_mode = "dynamic"
+build_threads = 11
+
+[[configs]]
+m = 16
+m0 = 32
+ef_construction = 200
+build_mode = "batched"
+build_threads = 11

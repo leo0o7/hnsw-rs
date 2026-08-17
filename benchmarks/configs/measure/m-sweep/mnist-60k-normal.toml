@@ -10,8 +10,13 @@ seed = 42
 ef_searches = [16, 32, 64, 128, 256, 512]
 
 [[configs]]
-m = 6
-m0 = 12
+m = 4
+m0 = 8
+ef_construction = 200
+
+[[configs]]
+m = 8
+m0 = 16
 ef_construction = 200
 
 [[configs]]
@@ -22,4 +27,9 @@ ef_construction = 200
 [[configs]]
 m = 32
 m0 = 64
+ef_construction = 200
+
+[[configs]]
+m = 64
+m0 = 128
 ef_construction = 200

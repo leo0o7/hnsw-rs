@@ -18,7 +18,6 @@ run_config() {
 build_sequential() {
   run_config "$CONFIG_ROOT/build/m-sweep/sift-1m.toml"
   run_config "$CONFIG_ROOT/build/m-sweep/mnist-60k.toml"
-  run_config "$CONFIG_ROOT/build/ef-construction-sweep/sift-1m.toml"
   run_config "$CONFIG_ROOT/build/size-sweep/sift-100k.toml"
   run_config "$CONFIG_ROOT/build/size-sweep/sift-250k.toml"
   run_config "$CONFIG_ROOT/build/size-sweep/sift-500k.toml"
@@ -26,7 +25,12 @@ build_sequential() {
 }
 
 build_parallel() {
+  run_config "$CONFIG_ROOT/build/ef-construction-sweep/sift-1m.toml"
   run_config "$CONFIG_ROOT/build/parallel-construction/sift-1m.toml"
+  run_config "$CONFIG_ROOT/build/parallel-construction/size-sift-100k.toml"
+  run_config "$CONFIG_ROOT/build/parallel-construction/size-sift-250k.toml"
+  run_config "$CONFIG_ROOT/build/parallel-construction/size-sift-500k.toml"
+  run_config "$CONFIG_ROOT/build/parallel-construction/size-sift-1m.toml"
 }
 
 build() {
@@ -51,7 +55,6 @@ build() {
 measure() {
   run_config "$CONFIG_ROOT/measure/m-sweep/sift-1m-normal.toml"
   run_config "$CONFIG_ROOT/measure/m-sweep/mnist-60k-normal.toml"
-  run_config "$CONFIG_ROOT/measure/ef-construction-sweep/sift-1m-normal.toml"
   run_config "$CONFIG_ROOT/measure/size-sweep/sift-100k-normal.toml"
   run_config "$CONFIG_ROOT/measure/size-sweep/sift-250k-normal.toml"
   run_config "$CONFIG_ROOT/measure/size-sweep/sift-500k-normal.toml"
