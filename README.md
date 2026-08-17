@@ -30,6 +30,16 @@ Also, this is not intended to replace production ANN libraries.
 
 ## Usage
 
+Clone the repository and initialize the product-quantization submodule:
+
+```sh
+git clone https://github.com/leo0o7/hnsw.git
+cd hnsw
+git submodule update --init
+```
+
+Example:
+
 ```rust
 use hnsw::{Hnsw, HnswSearcher, L2Squared};
 
@@ -91,9 +101,9 @@ Construction can be run sequentially, dynamically with concurrent inserts, or in
 
 ![Product-quantization trade-off](benchmarks/plots/pq_tradeoff.svg)
 
-### Detailed benchmark results
+### Benchmark suite
 
-Detailed results, configurations, and reproduction instructions are available in [`benchmarks/README.md`](benchmarks/README.md).
+Configurations and reproduction instructions are available in [`benchmarks/README.md`](benchmarks/README.md).
 
 ### Reproducing the benchmark
 
