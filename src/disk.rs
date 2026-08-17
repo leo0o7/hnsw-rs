@@ -83,17 +83,16 @@ where
     where
         S: serde::Serializer,
     {
+        let _guard = self.update_lock.write().unwrap();
+        let storage = self.storage.read().unwrap();
         let mut state = serializer.serialize_struct("Hnsw", 9)?;
         let (ep, max_layer) = *self.entry.read().unwrap();
         state.serialize_field("M", &(self.M as u64))?;
         state.serialize_field("M0", &(self.M0 as u64))?;
         state.serialize_field("ef_construction", &(self.ef_construction as u64))?;
         state.serialize_field("entry_point", &(ep as u64))?;
-        state.serialize_field(
-            "data",
-            &FlatF32::from(self.storage.read().unwrap().data.as_slice()),
-        )?;
-        state.serialize_field("nodes", &self.storage.read().unwrap().nodes)?;
+        state.serialize_field("data", &FlatF32::from(storage.data.as_slice()))?;
+        state.serialize_field("nodes", &storage.nodes)?;
         state.serialize_field("max_layer", &(max_layer as u64))?;
         state.serialize_field("ml", &self.ml)?;
         state.serialize_field("seed", &self.seed)?;
@@ -134,6 +133,7 @@ where
             M0: disk.M0,
             ef_construction: disk.ef_construction,
             entry: RwLock::new((disk.entry_point, disk.max_layer)),
+            update_lock: RwLock::new(()),
             storage: RwLock::new(Storage {
                 data,
                 nodes: disk.nodes,

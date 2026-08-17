@@ -30,6 +30,7 @@ pub struct Hnsw<const D: usize, DS = L2Squared> {
     pub(crate) ef_construction: usize,
     pub(crate) storage: RwLock<Storage<D>>,
     pub(crate) entry: RwLock<(usize, usize)>,
+    pub(crate) update_lock: RwLock<()>,
     ml: f64,
     seed: u64,
     rng: Mutex<StdRng>,
@@ -91,6 +92,7 @@ where
             M0,
             ef_construction,
             entry: RwLock::new((0, 0)),
+            update_lock: RwLock::new(()),
             storage: RwLock::new(Storage {
                 data: Vec::new(),
                 nodes: Vec::new(),
@@ -197,6 +199,7 @@ where
     }
 
     pub fn insert_with_context(&self, vec: [f32; D], ctx: &mut InsertContext) -> usize {
+        let _guard = self.update_lock.read().unwrap();
         let (node, max_lyr) = self.new_node();
 
         self.prepare_node(vec, &node, max_lyr, ctx);
