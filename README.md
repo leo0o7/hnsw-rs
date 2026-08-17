@@ -67,14 +67,7 @@ Search effort is query configuration, not index state. The default `search(query
 
 ## Benchmarks
 
-Measured on an Apple M3 Pro with saved indexes loaded from disk.
-
-| Dataset         |   Best high-throughput result |      Best high-recall result |
-| --------------- | ----------------------------: | ---------------------------: |
-| SIFT-1M, 128d   | 13.4k QPS at 0.8897 recall@10 | 3.2k QPS at 0.9948 recall@10 |
-| MNIST-60k, 784d |  8.0k QPS at 0.9866 recall@10 | 2.4k QPS at 0.9998 recall@10 |
-
-Search curves sweep `ef_search`. Higher values generally improve recall while reducing throughput. Search plots use _recall@10_ on the horizontal axis and _QPS_ on a logarithmic vertical axis, so points toward the upper right are better.
+Recall-QPS curves sweep `ef_search`: increasing it usually raises recall and lowers QPS. Points toward the upper right are better.
 
 ### Graph degree
 
@@ -91,11 +84,8 @@ Search curves sweep `ef_search`. Higher values generally improve recall while re
 ### Parallel construction
 
 Construction can be run sequentially, dynamically with concurrent inserts, or in a batched mode optimized for building an empty index.
-Both parallel methods take an optional worker count; `None` uses available parallelism.
 
 ![Parallel construction](benchmarks/plots/parallel_construction.svg)
-
-![Parallel construction scaling](benchmarks/plots/parallel_scaling.svg)
 
 ### Product quantization
 
