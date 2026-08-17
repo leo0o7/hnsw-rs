@@ -116,7 +116,7 @@ where
 {
     pub fn insert_context(&self) -> InsertContext {
         InsertContext {
-            select_ctx: SelectContext::init(self.M0, self.len()),
+            select_ctx: SelectContext::init(self.len(), self.M0),
             search_ctx: SearchContext::with_capacity(self.len(), self.ef_construction),
         }
     }
